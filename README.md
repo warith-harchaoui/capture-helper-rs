@@ -1,73 +1,74 @@
-# capture-helper-rs
+# Capture Helper (Rust)
+
+[🇫🇷](https://github.com/warith-harchaoui/capture-helper-rs/blob/main/LISEZMOI.md) · [🇬🇧](https://github.com/warith-harchaoui/capture-helper-rs/blob/main/README.md)
 
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](./LICENSE)
 
-Portage Rust, minimal et honnête, de la promesse micro de [`capture-helper`](https://github.com/warith-harchaoui/capture-helper) (Python, même auteur) : transformer un microphone en direct en un flux de petits paquets audio (PCM) exploitables par le reste d'une chaîne de traitement, sans dépendre d'un service tiers.
+Rust rewrite of the microphone half of [`capture-helper`](https://github.com/warith-harchaoui/capture-helper): turn a live microphone into a stream of small audio packets (PCM) that the rest of an audio pipeline can consume, with no third-party service in the loop.
 
-Ce n'est **pas** un portage ligne à ligne. Le volet caméra du projet Python d'origine (`iter_camera_frames`, GUI de scènes multi-sources, mixage vidéo, etc.) **n'est pas repris ici** — hors périmètre v0.1. Seul le micro compte, parce que ce crate existe pour nourrir la capture micro en direct de [`scribe-reunion`](https://github.com/warith-harchaoui) (workspace Rust en cours de construction) sur macOS / Windows / Linux.
+This is not a line-by-line port. The camera half of the original (`iter_camera_frames`, the multi-source scene GUI, video mixing) is out of scope for v0.1 — only the microphone is covered.
 
-## Ce que fait ce crate (v0.1)
+## What this crate does (v0.1)
 
-- `list_input_devices() -> Result<Vec<String>, CaptureHelperError>` : énumère les périphériques d'entrée audio du système via [`cpal`](https://crates.io/crates/cpal). Une liste vide est une réponse honnête (aucun micro branché) ; seule une vraie panne d'énumération de l'hôte renvoie une erreur.
-- `MicCapture` : ouvre un flux micro (périphérique par défaut ou nommé) et le diffuse comme un itérateur de `MicFrame` — bloquant via `for frame in mic { ... }` / `next_frame()`, ou non bloquant via `try_next_frame()`.
-- `MicFrame { samples: Vec<f32>, sample_rate: u32, channels: u16, timestamp: Instant }` : un paquet PCM normalisé en `f32` dans `[-1.0, 1.0]`, quel que soit le format natif du périphérique (`f32`, `i16`, `u16`).
-- `CaptureHelperError` (via `thiserror`) : une variante distincte par cause d'échec — aucun périphérique par défaut, nom introuvable, échec d'énumération, échec de lecture de configuration, format d'échantillon non supporté, échec de construction ou de démarrage du flux. Pas de fourre-tout `String`.
+- `list_input_devices() -> Result<Vec<String>, CaptureHelperError>` — enumerates the system's audio input devices via [`cpal`](https://crates.io/crates/cpal). An empty list is an honest answer (no microphone plugged in); only a real host enumeration failure returns an error.
+- `MicCapture` — opens a microphone stream (default or named device) and exposes it as an iterator of `MicFrame`: blocking via `for frame in mic { ... }` / `next_frame()`, or non-blocking via `try_next_frame()`.
+- `MicFrame { samples: Vec<f32>, sample_rate: u32, channels: u16, timestamp: Instant }` — a PCM packet normalized to `f32` in `[-1.0, 1.0]`, regardless of the device's native sample format (`f32`, `i16`, `u16`).
+- `CaptureHelperError` (via `thiserror`) — one variant per failure mode: no default device, named device not found, enumeration failure, stream-config failure, unsupported sample format, stream-build failure, stream-start failure. No catch-all `String`.
 
-## Ce que ce crate ne fait pas (encore, ou pas du tout)
+## What this crate does not do (yet, or at all)
 
-- Pas de caméra, pas d'images, pas de GUI — ce volet du Python d'origine reste dans `capture-helper` (Python) et n'a pas d'équivalent ici.
-- Pas de rééchantillonnage, pas de conversion mono/stéréo, pas de VAD : `MicFrame` livre exactement ce que le périphérique donne, normalisé en `f32`, rien de plus.
-- Pas de sélection de périphérique par indice ou sous-chaîne de nom (seulement nom exact ou périphérique par défaut).
+- No camera, no images, no GUI — that half of the Python original stays there.
+- No resampling, no mono/stereo conversion, no voice-activity detection: `MicFrame` delivers exactly what the device gives, normalized to `f32`, nothing more.
+- No device selection by index or name substring (exact name or default device only).
 
-## Exemple
+## Example
 
 ```rust
 use capture_helper_rs::{list_input_devices, MicCapture};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     for name in list_input_devices()? {
-        println!("périphérique d'entrée : {name}");
+        println!("input device: {name}");
     }
 
     let mic = MicCapture::from_default_device()?;
     for frame in mic.take(50) {
-        println!("{} échantillons @ {} Hz, {} canal(aux)", frame.samples.len(), frame.sample_rate, frame.channels);
+        println!("{} samples @ {} Hz, {} channel(s)", frame.samples.len(), frame.sample_rate, frame.channels);
     }
 
     Ok(())
 }
 ```
 
-## Limites de test — à lire avant de faire confiance à la CI
+## Test coverage — read before trusting CI
 
-Cet environnement (et probablement votre CI) n'a pas de microphone réel branché. Concrètement :
+This environment (and probably yours) has no real microphone attached. Concretely:
 
-- `list_input_devices()` **est** testé : il doit toujours retourner un `Vec` (potentiellement vide) sans jamais paniquer.
-- Les chemins d'erreur atteignables sans matériel **sont** testés : demander un périphérique nommé qui n'existe manifestement pas doit produire `CaptureHelperError::DeviceNotFound` (ou `DeviceEnumeration` si l'hôte n'a aucun sous-système audio).
-- La capture réelle d'un flux (`MicCapture::from_default_device()` qui reçoit effectivement des échantillons, ou `from_named_device()` sur un nom qui existe vraiment) **n'est pas testée en CI** — ça nécessite un micro physique et une permission OS. Aucun test de ce dépôt ne prétend vérifier ce chemin ; c'est une vérification manuelle à faire sur une machine avec micro avant de s'appuyer dessus en production.
+- `list_input_devices()` **is** tested: it must always return a `Vec` (possibly empty) without panicking.
+- Error paths reachable without hardware **are** tested: asking for a named device that clearly doesn't exist must produce `CaptureHelperError::DeviceNotFound` (or `DeviceEnumeration` if the host has no audio subsystem at all).
+- Actually capturing a stream (`MicCapture::from_default_device()` receiving real samples, or `from_named_device()` on a name that truly exists) **is not tested in CI** — it needs a physical microphone and an OS permission grant. No test in this repository claims to verify that path; it's a manual check to run on a machine with a microphone before relying on it in production.
 
-## État du projet
+## Project status
 
-Mesure de couverture faite avec [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) le 2026-08-31, sur macOS (outils LLVM fournis par Xcode) :
+Coverage measured with [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) on 2026-08-31, on macOS (LLVM tools via Xcode):
 
-| Fichier | Lignes couvertes |
+| File | Line coverage |
 |---|---|
 | `src/error.rs` | 100.00% |
 | `src/devices.rs` | 92.86% |
 | `src/capture.rs` | 15.69% |
-| **Total** | **32.03%** (128 lignes, 87 non couvertes) |
+| **Total** | **32.03%** (128 lines, 87 uncovered) |
 
-Le chiffre global est bas parce que l'essentiel du code non couvert dans `capture.rs` est exactement le chemin décrit ci-dessus (construction et lecture réelle du flux `cpal`) : il ne peut pas être exercé sans microphone physique, et ce crate ne simule pas un faux périphérique juste pour gonfler un pourcentage. `error.rs` et `devices.rs` — le code atteignable sans matériel — sont couverts à 92–100%.
+The overall figure is low because most of the uncovered code in `capture.rs` is exactly the path described above (building and reading a real `cpal` stream): it cannot be exercised without a physical microphone, and this crate does not fake a device just to inflate a percentage. `error.rs` and `devices.rs` — the code reachable without hardware — sit at 92–100%.
 
-Pour reproduire :
+To reproduce:
 
 ```bash
-# une fois : outils de couverture LLVM
 cargo install cargo-llvm-cov
-# macOS sans rustup : pointer sur les outils LLVM d'Xcode
+# macOS without rustup: point at Xcode's LLVM tools
 export LLVM_COV=$(xcrun --find llvm-cov)
 export LLVM_PROFDATA=$(xcrun --find llvm-profdata)
-# avec rustup (Linux/Windows/macOS) : rustup component add llvm-tools-preview
+# with rustup (Linux/Windows/macOS): rustup component add llvm-tools-preview
 
 cargo llvm-cov --summary-only
 ```
@@ -79,9 +80,9 @@ cargo llvm-cov --summary-only
 capture-helper-rs = { git = "https://github.com/warith-harchaoui/capture-helper-rs" }
 ```
 
-Prérequis : Rust stable récent. `cpal` gère nativement CoreAudio (macOS), WASAPI (Windows) et ALSA/PulseAudio/JACK/PipeWire (Linux) — pas de dépendance externe type `ffmpeg` ou `PortAudio` à installer séparément.
+Requires a recent stable Rust toolchain. `cpal` handles CoreAudio (macOS), WASAPI (Windows), and ALSA/PulseAudio/JACK/PipeWire (Linux) natively — no separate `ffmpeg`/`PortAudio` install needed.
 
-## Vérifications avant de pousser
+## Checks before pushing
 
 ```bash
 cargo build
@@ -89,10 +90,14 @@ cargo test
 cargo clippy --all-targets
 ```
 
-## Auteur
+## Related
+
+Part of the same author's local-first tooling as [`capture-helper`](https://github.com/warith-harchaoui/capture-helper) (Python) and the [AI Helpers](https://github.com/warith-harchaoui/ai-helpers) suite. Independent rewrite, not a binding.
+
+## Author
 
 - [Warith HARCHAOUI](https://linkedin.com/in/warith-harchaoui)
 
-## Licence
+## License
 
-BSD-3-Clause — voir [LICENSE](./LICENSE).
+BSD-3-Clause — see [LICENSE](./LICENSE).
