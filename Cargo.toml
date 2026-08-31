@@ -1,0 +1,15 @@
+[package]
+name = "capture-helper-rs"
+version = "0.1.0"
+edition = "2024"
+description = "Live microphone capture for Rust: cross-platform device enumeration and a streaming MicFrame API on top of cpal."
+license = "BSD-3-Clause"
+authors = ["Warith HARCHAOUI"]
+repository = "https://github.com/warith-harchaoui/capture-helper-rs"
+readme = "README.md"
+keywords = ["audio", "microphone", "cpal", "capture", "streaming"]
+categories = ["multimedia::audio", "hardware-support"]
+
+[dependencies]
+cpal = "0.18"
+thiserror = "2"
