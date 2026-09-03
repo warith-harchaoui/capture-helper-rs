@@ -59,12 +59,20 @@ impl MicCapture {
             SampleFormat::F32 => {
                 build_stream::<f32>(device, config, tx, channels, sample_rate, |s| s)?
             }
-            SampleFormat::I16 => build_stream::<i16>(device, config, tx, channels, sample_rate, |s| {
-                s as f32 / i16::MAX as f32
-            })?,
-            SampleFormat::U16 => build_stream::<u16>(device, config, tx, channels, sample_rate, |s| {
-                (s as f32 - 32768.0) / 32768.0
-            })?,
+            // Divide by 32768.0 (i16::MIN's magnitude), not i16::MAX (32767):
+            // dividing by MAX would send i16::MIN to -1.0000305, breaking the
+            // documented [-1.0, 1.0] guarantee. Same convention as the U16
+            // branch below.
+            SampleFormat::I16 => {
+                build_stream::<i16>(device, config, tx, channels, sample_rate, |s| {
+                    s as f32 / 32768.0
+                })?
+            }
+            SampleFormat::U16 => {
+                build_stream::<u16>(device, config, tx, channels, sample_rate, |s| {
+                    (s as f32 - 32768.0) / 32768.0
+                })?
+            }
             other => {
                 return Err(CaptureHelperError::UnsupportedSampleFormat(format!(
                     "{other:?}"
@@ -76,7 +84,10 @@ impl MicCapture {
             .play()
             .map_err(|e| CaptureHelperError::StreamPlay(e.to_string()))?;
 
-        Ok(Self { _stream: stream, rx })
+        Ok(Self {
+            _stream: stream,
+            rx,
+        })
     }
 
     /// Block until the next [`MicFrame`] is available, or the stream has
@@ -147,6 +158,25 @@ where
 mod tests {
     use super::*;
     use crate::error::CaptureHelperError;
+
+    /// The i16 -> f32 conversion used in `from_device` must stay within the
+    /// documented [-1.0, 1.0] bound at both extremes, including i16::MIN
+    /// (which a naive `/ i16::MAX` conversion overshoots to -1.0000305).
+    #[test]
+    fn i16_to_f32_conversion_stays_within_bounds() {
+        let to_f32 = |s: i16| s as f32 / 32768.0;
+        let min = to_f32(i16::MIN);
+        let max = to_f32(i16::MAX);
+        assert!(
+            (-1.0..=1.0).contains(&min),
+            "i16::MIN mapped to {min}, outside [-1.0, 1.0]"
+        );
+        assert!(
+            (-1.0..=1.0).contains(&max),
+            "i16::MAX mapped to {max}, outside [-1.0, 1.0]"
+        );
+        assert_eq!(min, -1.0);
+    }
 
     /// Real streaming (`from_default_device`, or `from_named_device` against
     /// a name that actually exists) needs live audio hardware and cannot be
