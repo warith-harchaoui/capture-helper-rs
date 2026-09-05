@@ -85,10 +85,18 @@ Requires a recent stable Rust toolchain. `cpal` handles CoreAudio (macOS), WASAP
 ## Checks before pushing
 
 ```bash
-cargo build
-cargo test
-cargo clippy --all-targets
+scripts/install-hooks.sh   # once per clone: installs the pre-push gate below
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all
+scripts/check-fresh-resolve.sh   # builds with no Cargo.lock, like a downstream consumer
 ```
+
+The last one exists because the other three, and CI, all build against the committed
+`Cargo.lock` — which no consumer of the published crate ever sees. A dependency range that
+has gone bad stays green here while breaking every fresh `cargo add` / `cargo install`, and
+`cargo publish --dry-run` doesn't catch it either (it verifies with the same lock). CI runs
+this check once, on Linux.
 
 ## Related
 
