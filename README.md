@@ -1,8 +1,8 @@
 # Capture Helper (Rust)
 
-[🇫🇷](https://github.com/warith-harchaoui/capture-helper-rs/blob/main/LISEZMOI.md) · [🇬🇧](https://github.com/warith-harchaoui/capture-helper-rs/blob/main/README.md)
+[🇫🇷](https://github.com/warith-harchaoui/capture-helper-rs/blob/master/LISEZMOI.md) · [🇬🇧](https://github.com/warith-harchaoui/capture-helper-rs/blob/master/README.md)
 
-[![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](./LICENSE)
+[![crates.io](https://img.shields.io/crates/v/capture-helper-rs.svg)](https://crates.io/crates/capture-helper-rs) [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](./LICENSE)
 
 Rust rewrite of the microphone half of [`capture-helper`](https://github.com/warith-harchaoui/capture-helper): turn a live microphone into a stream of small audio packets (PCM) that the rest of an audio pipeline can consume, with no third-party service in the loop.
 
@@ -77,7 +77,7 @@ cargo llvm-cov --summary-only
 
 ```toml
 [dependencies]
-capture-helper-rs = { git = "https://github.com/warith-harchaoui/capture-helper-rs" }
+capture-helper-rs = "0.1"
 ```
 
 Requires a recent stable Rust toolchain. `cpal` handles CoreAudio (macOS), WASAPI (Windows), and ALSA/PulseAudio/JACK/PipeWire (Linux) natively — no separate `ffmpeg`/`PortAudio` install needed.
