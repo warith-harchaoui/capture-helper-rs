@@ -1,6 +1,6 @@
 [package]
 name = "capture-helper-rs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Live microphone capture for Rust: cross-platform device enumeration and a streaming MicFrame API on top of cpal."
 license = "BSD-3-Clause"
