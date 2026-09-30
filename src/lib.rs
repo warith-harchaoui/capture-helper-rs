@@ -21,6 +21,10 @@
 //! }
 //! ```
 
+// Every public item carries a doc comment. Warned here, denied by CI's
+// `-D warnings`, so a published API never reaches docs.rs undocumented.
+#![warn(missing_docs)]
+
 mod capture;
 mod devices;
 mod error;
