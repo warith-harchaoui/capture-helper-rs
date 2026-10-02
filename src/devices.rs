@@ -26,6 +26,15 @@ pub fn list_input_devices() -> Result<Vec<String>, CaptureHelperError> {
 /// [`crate::MicCapture::from_default_device`] turns into
 /// [`crate::CaptureHelperError::NoInputDevice`] — this is the way to ask which
 /// microphone that would be, without opening it.
+///
+/// **For display, not for round-tripping.** The name is not guaranteed to appear
+/// in [`list_input_devices`], so do not feed it back into
+/// [`crate::MicCapture::from_named_device`]. ALSA is the counter-example that
+/// settled this: on a headless Linux box its default device reports itself as
+/// `"Default Audio Device"` while enumeration lists the very same device as
+/// `"Discard all samples (playback) or generate zero samples (capture)"`. To
+/// open the default device, use [`crate::MicCapture::from_default_device`],
+/// which never goes through a name at all.
 pub fn default_input_device_name() -> Option<String> {
     cpal::default_host()
         .default_input_device()
@@ -55,19 +64,23 @@ mod tests {
     }
 
     /// Asking which device is the default must never panic, on a machine with a
-    /// microphone or without one. When there *is* a default, it has to be one of
-    /// the devices enumeration reports — otherwise the two functions disagree and
-    /// a caller cannot round-trip the name through
-    /// [`crate::MicCapture::from_named_device`].
+    /// microphone or without one, and must not answer with an empty name.
+    ///
+    /// What this deliberately does *not* assert is that the name appears in
+    /// [`list_input_devices`]. It did until CI said otherwise: ALSA on a headless
+    /// runner calls its default `"Default Audio Device"` while listing the same
+    /// device as `"Discard all samples (playback) or generate zero samples
+    /// (capture)"`. The two names are both real, and the function's documentation
+    /// now says what that means — the name is for display, not for feeding back
+    /// into `from_named_device`.
     #[test]
-    fn default_input_device_name_agrees_with_the_enumerated_list() {
+    fn default_input_device_name_is_absent_or_meaningful() {
         let Some(name) = default_input_device_name() else {
             return; // Headless host: no default input, which is a valid answer.
         };
-        let listed = list_input_devices().expect("enumeration succeeds");
         assert!(
-            listed.contains(&name),
-            "default input {name:?} is missing from the enumerated list {listed:?}"
+            !name.trim().is_empty(),
+            "a default input device reported an empty name"
         );
     }
 }

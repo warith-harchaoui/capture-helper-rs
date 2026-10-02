@@ -28,7 +28,10 @@ A dead microphone now ends the loop instead of hanging it.
   own afterwards.
 - **`default_input_device_name()`** — which microphone `from_default_device` would open,
   without opening it. An `Option`, not a `Result`: "no default input" is the ordinary state of
-  a headless machine, not a failure.
+  a headless machine, not a failure. For display, not for round-tripping: the name is not
+  guaranteed to appear in `list_input_devices()`. ALSA on a headless runner calls its default
+  `"Default Audio Device"` while listing the same device as `"Discard all samples (playback) or
+  generate zero samples (capture)"` — found by CI, which is where a claim like that gets tested.
 
 ### Changed
 - A library no longer writes to stderr on its own initiative; see `MicCapture::error()` above.
