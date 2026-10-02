@@ -11,7 +11,9 @@ This is not a line-by-line port. The camera half of the original (`iter_camera_f
 ## What this crate does (v0.1)
 
 - `list_input_devices() -> Result<Vec<String>, CaptureHelperError>` — enumerates the system's audio input devices via [`cpal`](https://crates.io/crates/cpal). An empty list is an honest answer (no microphone plugged in); only a real host enumeration failure returns an error.
-- `MicCapture` — opens a microphone stream (default or named device) and exposes it as an iterator of `MicFrame`: blocking via `for frame in mic { ... }` / `next_frame()`, or non-blocking via `try_next_frame()`.
+- `default_input_device_name() -> Option<String>` — which microphone `MicCapture::from_default_device()` would open, without opening it. `None` is the ordinary state of a headless machine, not a failure.
+- `MicCapture` — opens a microphone stream (default or named device) and exposes it as an iterator of `MicFrame`: blocking via `for frame in &mic { ... }` / `next_frame()`, or non-blocking via `try_next_frame()`. Iterating by reference keeps the handle, so `mic.error()` can still say why the stream ended; iterating by value gives that answer away with the handle.
+- `MicCapture::error() -> Option<String>` — the device error that ended the capture, if one did. `cpal` reports stream failures through a callback with no path back to the caller, so the message is handed back here rather than printed to stderr. A failed stream ends iteration instead of blocking it (fixed in 0.1.2).
 - `MicFrame { samples: Vec<f32>, sample_rate: u32, channels: u16, timestamp: Instant }` — a PCM packet normalized to `f32` in `[-1.0, 1.0]`, regardless of the device's native sample format (`f32`, `i16`, `u16`).
 - `CaptureHelperError` (via `thiserror`) — one variant per failure mode: no default device, named device not found, enumeration failure, stream-config failure, unsupported sample format, stream-build failure, stream-start failure. No catch-all `String`.
 
@@ -24,16 +26,23 @@ This is not a line-by-line port. The camera half of the original (`iter_camera_f
 ## Example
 
 ```rust
-use capture_helper_rs::{list_input_devices, MicCapture};
+use capture_helper_rs::{default_input_device_name, list_input_devices, MicCapture};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     for name in list_input_devices()? {
         println!("input device: {name}");
     }
+    println!("default: {:?}", default_input_device_name());
 
     let mic = MicCapture::from_default_device()?;
-    for frame in mic.take(50) {
+    for frame in (&mic).take(50) {
         println!("{} samples @ {} Hz, {} channel(s)", frame.samples.len(), frame.sample_rate, frame.channels);
+    }
+
+    // The loop ends either because you stopped asking or because the device
+    // failed. This is how you tell which.
+    if let Some(err) = mic.error() {
+        eprintln!("capture stopped: {err}");
     }
 
     Ok(())
@@ -50,14 +59,16 @@ This environment (and probably yours) has no real microphone attached. Concretel
 
 ## Project status
 
-Coverage measured with [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) on 2026-08-31, on macOS (LLVM tools via Xcode):
+Coverage measured with [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov), re-measured 2026-10-02 for 0.1.2, on macOS (LLVM tools via Xcode):
 
 | File | Line coverage |
 |---|---|
 | `src/error.rs` | 100.00% |
-| `src/devices.rs` | 92.86% |
-| `src/capture.rs` | 15.69% |
-| **Total** | **32.03%** (128 lines, 87 uncovered) |
+| `src/devices.rs` | 92.59% |
+| `src/capture.rs` | 44.57% |
+| **Total** | **53.36%** (223 lines, 104 uncovered) |
+
+`capture.rs` roughly tripled in 0.1.2: the stream-failure plumbing it gained is deliberately free-standing, so it is testable without a microphone. What stays uncovered is the part that genuinely needs one — see the section above.
 
 The overall figure is low because most of the uncovered code in `capture.rs` is exactly the path described above (building and reading a real `cpal` stream): it cannot be exercised without a physical microphone, and this crate does not fake a device just to inflate a percentage. `error.rs` and `devices.rs` — the code reachable without hardware — sit at 92–100%.
 
@@ -80,7 +91,7 @@ cargo llvm-cov --summary-only
 capture-helper-rs = "0.1"
 ```
 
-Requires a recent stable Rust toolchain. `cpal` handles CoreAudio (macOS), WASAPI (Windows), and ALSA/PulseAudio/JACK/PipeWire (Linux) natively — no separate `ffmpeg`/`PortAudio` install needed.
+Requires Rust 1.85 or newer. `cpal` handles CoreAudio (macOS), WASAPI (Windows), and ALSA/PulseAudio/JACK/PipeWire (Linux) natively — no separate `ffmpeg`/`PortAudio` install needed.
 
 ## Checks before pushing
 

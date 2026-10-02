@@ -2,8 +2,72 @@ use crate::error::CaptureHelperError;
 use crate::frame::MicFrame;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// How long a blocking wait sits on the channel before looking at
+/// [`StreamFailure`] again.
+///
+/// `cpal` reports a device failure through a callback that cannot close the
+/// frame channel, so a waiter blocked forever on `recv()` would never learn the
+/// stream is dead. Waking a few times a second costs nothing measurable and is
+/// what lets iteration end instead of hanging.
+const FAILURE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The one piece of state shared between a live stream's error callback and the
+/// [`MicCapture`] handle.
+///
+/// `cpal`'s error callback has no return path to whoever built the stream, so
+/// before 0.1.2 a device that failed mid-capture printed one line to stderr and
+/// left every consumer blocked on a channel nothing would ever write to again.
+/// The failure is recorded here instead, where both the blocking wait and
+/// [`MicCapture::error`] can see it.
+#[derive(Default)]
+struct StreamFailure {
+    failed: AtomicBool,
+    message: Mutex<Option<String>>,
+}
+
+impl StreamFailure {
+    fn record(&self, message: String) {
+        // Message first, flag second: a reader that sees `failed` must find the
+        // message already in place, never an empty slot.
+        *self.message.lock().unwrap_or_else(|p| p.into_inner()) = Some(message);
+        self.failed.store(true, Ordering::Release);
+    }
+
+    fn failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+
+    fn message(&self) -> Option<String> {
+        self.message
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+}
+
+/// The blocking wait behind [`MicCapture::next_frame`] and the `Iterator` impl.
+///
+/// Returns `None` once the stream can no longer produce: either every sender is
+/// gone, or the device reported a failure. Free-standing (rather than a method)
+/// so it can be exercised without audio hardware — see this module's tests.
+fn recv_frame(rx: &Receiver<MicFrame>, failure: &StreamFailure) -> Option<MicFrame> {
+    loop {
+        match rx.recv_timeout(FAILURE_POLL_INTERVAL) {
+            Ok(frame) => return Some(frame),
+            Err(RecvTimeoutError::Disconnected) => return None,
+            Err(RecvTimeoutError::Timeout) => {
+                if failure.failed() {
+                    return None;
+                }
+            }
+        }
+    }
+}
 
 /// A live handle on a microphone input stream.
 ///
@@ -19,6 +83,7 @@ use std::time::Instant;
 pub struct MicCapture {
     _stream: cpal::Stream,
     rx: Receiver<MicFrame>,
+    failure: Arc<StreamFailure>,
 }
 
 impl MicCapture {
@@ -54,22 +119,23 @@ impl MicCapture {
         let config: StreamConfig = supported_config.into();
 
         let (tx, rx) = mpsc::channel::<MicFrame>();
+        let failure = Arc::new(StreamFailure::default());
 
         let stream = match sample_format {
             SampleFormat::F32 => {
-                build_stream::<f32>(device, config, tx, channels, sample_rate, |s| s)?
+                build_stream::<f32>(device, config, tx, &failure, channels, sample_rate, |s| s)?
             }
             // Divide by 32768.0 (i16::MIN's magnitude), not i16::MAX (32767):
             // dividing by MAX would send i16::MIN to -1.0000305, breaking the
             // documented [-1.0, 1.0] guarantee. Same convention as the U16
             // branch below.
             SampleFormat::I16 => {
-                build_stream::<i16>(device, config, tx, channels, sample_rate, |s| {
+                build_stream::<i16>(device, config, tx, &failure, channels, sample_rate, |s| {
                     s as f32 / 32768.0
                 })?
             }
             SampleFormat::U16 => {
-                build_stream::<u16>(device, config, tx, channels, sample_rate, |s| {
+                build_stream::<u16>(device, config, tx, &failure, channels, sample_rate, |s| {
                     (s as f32 - 32768.0) / 32768.0
                 })?
             }
@@ -87,29 +153,61 @@ impl MicCapture {
         Ok(Self {
             _stream: stream,
             rx,
+            failure,
         })
     }
 
     /// Block until the next [`MicFrame`] is available, or the stream has
-    /// stopped producing (device disconnected, `cpal` callback thread gone).
+    /// stopped producing — device disconnected, `cpal` callback thread gone, or
+    /// the device reported an error. `None` means no further frame will ever
+    /// arrive; call [`MicCapture::error`] to find out whether that was a failure
+    /// or an ordinary shutdown.
     pub fn next_frame(&self) -> Option<MicFrame> {
-        self.rx.recv().ok()
+        recv_frame(&self.rx, &self.failure)
     }
 
     /// Non-blocking poll: returns `None` immediately if no frame is queued
-    /// yet rather than waiting for one.
+    /// yet rather than waiting for one. Note that `None` here is ambiguous by
+    /// design — nothing yet, or nothing ever; [`MicCapture::error`] and
+    /// [`MicCapture::next_frame`] are what distinguish the two.
     pub fn try_next_frame(&self) -> Option<MicFrame> {
         self.rx.try_recv().ok()
+    }
+
+    /// The device error that ended this capture, if one did.
+    ///
+    /// `cpal` surfaces stream failures through a callback with no path back to
+    /// the caller, so the message is parked here rather than printed. `None`
+    /// means the stream has not failed — which includes a stream that simply has
+    /// not produced anything yet.
+    pub fn error(&self) -> Option<String> {
+        self.failure.message()
     }
 }
 
 /// Iterating over a `MicCapture` blocks for each [`MicFrame`] in turn — the
 /// idiomatic way to drain a live microphone stream in a `for` loop.
+///
+/// This impl *consumes* the handle, which also gives away the answer to "why did
+/// it stop?": see the by-reference impl below.
 impl Iterator for MicCapture {
     type Item = MicFrame;
 
     fn next(&mut self) -> Option<MicFrame> {
-        self.rx.recv().ok()
+        recv_frame(&self.rx, &self.failure)
+    }
+}
+
+/// The same blocking drain, by reference, so the handle survives the loop and
+/// [`MicCapture::error`] can still be asked why iteration ended. Every frame
+/// arrives through a `&self` channel receive, so nothing is given up by taking
+/// the stream this way — `for frame in &mic` and `for frame in mic` differ only
+/// in what you still own afterwards.
+impl Iterator for &MicCapture {
+    type Item = MicFrame;
+
+    fn next(&mut self) -> Option<MicFrame> {
+        recv_frame(&self.rx, &self.failure)
     }
 }
 
@@ -120,6 +218,7 @@ fn build_stream<T>(
     device: &cpal::Device,
     config: StreamConfig,
     tx: Sender<MicFrame>,
+    failure: &Arc<StreamFailure>,
     channels: u16,
     sample_rate: u32,
     to_f32: fn(T) -> f32,
@@ -127,6 +226,7 @@ fn build_stream<T>(
 where
     T: cpal::SizedSample + Send + 'static,
 {
+    let failure = Arc::clone(failure);
     device
         .build_input_stream(
             config,
@@ -143,11 +243,14 @@ where
                 // silently ignored rather than panicking on the audio thread.
                 let _ = tx.send(frame);
             },
-            |err| {
+            move |err| {
                 // cpal's error callback has no channel back to the caller that
-                // constructed the stream; eprintln-and-drop is the standard pattern
-                // here (mirrors scribe-reunion's sr-io mic adapter).
-                eprintln!("capture-helper-rs: input stream error: {err}");
+                // constructed the stream, and it cannot close the frame channel
+                // either — the data callback owns the sender and outlives this.
+                // Recording the failure is what lets a blocked consumer stop
+                // waiting; printing it, as this did before 0.1.2, left the
+                // consumer hanging on a stream that was already dead.
+                failure.record(err.to_string());
             },
             None,
         )
@@ -189,6 +292,62 @@ mod tests {
     /// rather than panicking — whether that's `DeviceNotFound` (the host
     /// enumerated devices and none matched) or `DeviceEnumeration` (the host
     /// has no audio subsystem at all, possible on some CI images).
+    /// A frame already queued must be delivered even if the device has since
+    /// failed — the failure ends the stream, it does not discard what was
+    /// captured before it.
+    #[test]
+    fn a_queued_frame_still_arrives_after_a_failure() {
+        let (tx, rx) = mpsc::channel::<MicFrame>();
+        let failure = StreamFailure::default();
+        tx.send(MicFrame {
+            samples: vec![0.25],
+            sample_rate: 48_000,
+            channels: 1,
+            timestamp: Instant::now(),
+        })
+        .unwrap();
+        failure.record("device went away".to_string());
+
+        let frame = recv_frame(&rx, &failure).expect("the queued frame");
+        assert_eq!(frame.samples, vec![0.25]);
+        // ...and then the stream ends instead of blocking on a dead device.
+        assert!(recv_frame(&rx, &failure).is_none());
+    }
+
+    /// The regression this plumbing exists for: before 0.1.2 the error callback
+    /// only printed, the sender stayed alive inside the data callback, and a
+    /// consumer blocked on `recv()` waited forever on a stream that was already
+    /// dead. The `tx` kept alive here is exactly that live-but-silent sender.
+    #[test]
+    fn a_failure_ends_the_wait_instead_of_hanging_forever() {
+        let (_tx, rx) = mpsc::channel::<MicFrame>();
+        let failure = Arc::new(StreamFailure::default());
+
+        let signal = Arc::clone(&failure);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            signal.record("stream error from the device".to_string());
+        });
+
+        assert!(recv_frame(&rx, &failure).is_none());
+        assert_eq!(
+            failure.message().as_deref(),
+            Some("stream error from the device")
+        );
+    }
+
+    /// A clean shutdown — every sender dropped, no device error — must also end
+    /// the wait, and must *not* look like a failure to the caller.
+    #[test]
+    fn dropping_the_sender_ends_the_wait_without_reporting_an_error() {
+        let (tx, rx) = mpsc::channel::<MicFrame>();
+        let failure = StreamFailure::default();
+        drop(tx);
+
+        assert!(recv_frame(&rx, &failure).is_none());
+        assert!(failure.message().is_none());
+    }
+
     #[test]
     fn from_named_device_fails_cleanly_for_a_bogus_name() {
         let bogus = "definitely-not-a-real-input-device-name-capture-helper-rs-test";

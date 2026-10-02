@@ -11,7 +11,9 @@ Ce n'est pas un portage ligne à ligne. Le volet caméra du projet d'origine (`i
 ## Ce que fait ce crate (v0.1)
 
 - `list_input_devices() -> Result<Vec<String>, CaptureHelperError>` : énumère les périphériques d'entrée audio du système via [`cpal`](https://crates.io/crates/cpal). Une liste vide est une réponse honnête (aucun micro branché) ; seule une vraie panne d'énumération de l'hôte renvoie une erreur.
-- `MicCapture` : ouvre un flux micro (périphérique par défaut ou nommé) et le diffuse comme un itérateur de `MicFrame` — bloquant via `for frame in mic { ... }` / `next_frame()`, ou non bloquant via `try_next_frame()`.
+- `default_input_device_name() -> Option<String>` : quel micro `MicCapture::from_default_device()` ouvrirait, sans l'ouvrir. `None` est l'état ordinaire d'une machine sans périphérique audio, pas une panne.
+- `MicCapture` : ouvre un flux micro (périphérique par défaut ou nommé) et le diffuse comme un itérateur de `MicFrame` — bloquant via `for frame in &mic { ... }` / `next_frame()`, ou non bloquant via `try_next_frame()`. Itérer par référence conserve la poignée, donc `mic.error()` peut encore dire pourquoi le flux s'est arrêté ; itérer par valeur emporte cette réponse avec la poignée.
+- `MicCapture::error() -> Option<String>` : l'erreur du périphérique qui a mis fin à la capture, s'il y en a eu une. `cpal` signale les pannes de flux via un callback sans chemin de retour vers l'appelant : le message est donc rendu ici plutôt qu'imprimé sur stderr. Un flux en panne termine l'itération au lieu de la bloquer (corrigé en 0.1.2).
 - `MicFrame { samples: Vec<f32>, sample_rate: u32, channels: u16, timestamp: Instant }` : un paquet PCM normalisé en `f32` dans `[-1.0, 1.0]`, quel que soit le format natif du périphérique (`f32`, `i16`, `u16`).
 - `CaptureHelperError` (via `thiserror`) : une variante distincte par cause d'échec — aucun périphérique par défaut, nom introuvable, échec d'énumération, échec de lecture de configuration, format d'échantillon non supporté, échec de construction ou de démarrage du flux. Pas de fourre-tout `String`.
 
@@ -24,16 +26,23 @@ Ce n'est pas un portage ligne à ligne. Le volet caméra du projet d'origine (`i
 ## Exemple
 
 ```rust
-use capture_helper_rs::{list_input_devices, MicCapture};
+use capture_helper_rs::{default_input_device_name, list_input_devices, MicCapture};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     for name in list_input_devices()? {
         println!("périphérique d'entrée : {name}");
     }
+    println!("par défaut : {:?}", default_input_device_name());
 
     let mic = MicCapture::from_default_device()?;
-    for frame in mic.take(50) {
+    for frame in (&mic).take(50) {
         println!("{} échantillons @ {} Hz, {} canal(aux)", frame.samples.len(), frame.sample_rate, frame.channels);
+    }
+
+    // La boucle s'arrête soit parce qu'on cesse de demander, soit parce que le
+    // périphérique est tombé. Voici comment distinguer les deux.
+    if let Some(err) = mic.error() {
+        eprintln!("capture interrompue : {err}");
     }
 
     Ok(())
@@ -50,14 +59,16 @@ Cet environnement (et probablement le vôtre) n'a pas de microphone réel branch
 
 ## État du projet
 
-Mesure de couverture faite avec [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) le 2026-08-31, sur macOS (outils LLVM fournis par Xcode) :
+Mesure de couverture faite avec [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov), remesurée le 2026-10-02 pour la 0.1.2, sur macOS (outils LLVM fournis par Xcode) :
 
 | Fichier | Lignes couvertes |
 |---|---|
-| `src/error.rs` | 100.00% |
-| `src/devices.rs` | 92.86% |
-| `src/capture.rs` | 15.69% |
-| **Total** | **32.03%** (128 lignes, 87 non couvertes) |
+| `src/error.rs` | 100,00 % |
+| `src/devices.rs` | 92,59 % |
+| `src/capture.rs` | 44,57 % |
+| **Total** | **53,36 %** (223 lignes, 104 non couvertes) |
+
+`capture.rs` a à peu près triplé en 0.1.2 : la machinerie de panne de flux qu'il a gagnée est volontairement autonome, donc testable sans micro. Ce qui reste non couvert est la partie qui en exige réellement un — voir la section ci-dessus.
 
 Le chiffre global est bas parce que l'essentiel du code non couvert dans `capture.rs` est exactement le chemin décrit ci-dessus (construction et lecture réelle du flux `cpal`) : il ne peut pas être exercé sans microphone physique, et ce crate ne simule pas un faux périphérique juste pour gonfler un pourcentage. `error.rs` et `devices.rs` — le code atteignable sans matériel — sont couverts à 92–100%.
 
@@ -80,7 +91,7 @@ cargo llvm-cov --summary-only
 capture-helper-rs = "0.1"
 ```
 
-Prérequis : Rust stable récent. `cpal` gère nativement CoreAudio (macOS), WASAPI (Windows) et ALSA/PulseAudio/JACK/PipeWire (Linux) — pas de dépendance externe type `ffmpeg` ou `PortAudio` à installer séparément.
+Prérequis : Rust 1.85 ou plus récent. `cpal` gère nativement CoreAudio (macOS), WASAPI (Windows) et ALSA/PulseAudio/JACK/PipeWire (Linux) — pas de dépendance externe type `ffmpeg` ou `PortAudio` à installer séparément.
 
 ## Vérifications avant de pousser
 

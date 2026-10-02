@@ -7,23 +7,31 @@
 //! the crate README for exactly what is (and is not) in scope.
 //!
 //! ```no_run
-//! use capture_helper_rs::{list_input_devices, MicCapture};
+//! use capture_helper_rs::{default_input_device_name, list_input_devices, MicCapture};
 //!
-//! // Enumerate available input devices.
+//! // Enumerate available input devices, and see which one is the default.
 //! for name in list_input_devices().unwrap() {
 //!     println!("input device: {name}");
 //! }
+//! println!("default: {:?}", default_input_device_name());
 //!
 //! // Stream from the default microphone (needs real hardware to run).
 //! let mic = MicCapture::from_default_device().unwrap();
-//! for frame in mic.take(10) {
+//! for frame in (&mic).take(10) {
 //!     println!("{} samples @ {} Hz", frame.samples.len(), frame.sample_rate);
+//! }
+//! // Iteration ends either because you stopped asking or because the device
+//! // failed — this is how you tell which.
+//! if let Some(err) = mic.error() {
+//!     eprintln!("capture stopped: {err}");
 //! }
 //! ```
 
-// Every public item carries a doc comment. Warned here, denied by CI's
-// `-D warnings`, so a published API never reaches docs.rs undocumented.
-#![warn(missing_docs)]
+// Every public item carries a doc comment, and no `unsafe` appears anywhere in this
+// crate — both are enforced here rather than left to review. `deny` (not `warn`) so
+// the gate holds locally too, not only under CI's `-D warnings`.
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 mod capture;
 mod devices;
@@ -31,6 +39,6 @@ mod error;
 mod frame;
 
 pub use capture::MicCapture;
-pub use devices::list_input_devices;
+pub use devices::{default_input_device_name, list_input_devices};
 pub use error::CaptureHelperError;
 pub use frame::MicFrame;
