@@ -36,6 +36,13 @@ jobs:
       - name: Cache cargo registry + build
         uses: Swatinem/rust-cache@v2
 
+      # cpal's ALSA backend needs the system dev headers to build alsa-sys. The
+      # job runs on Linux only now, so there is no `runner.os` guard left to
+      # write — and dropping this step when the matrix went away is exactly what
+      # turned the first 0.1.2 run red.
+      - name: Install ALSA dev headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       # Formatting is a fast, deterministic gate — run it first so a whitespace slip fails
       # in seconds rather than after a full build.
       - name: Format check
