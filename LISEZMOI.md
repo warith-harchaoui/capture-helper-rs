@@ -57,6 +57,38 @@ Cet environnement (et probablement le vôtre) n'a pas de microphone réel branch
 - Les chemins d'erreur atteignables sans matériel **sont** testés : demander un périphérique nommé qui n'existe manifestement pas doit produire `CaptureHelperError::DeviceNotFound` (ou `DeviceEnumeration` si l'hôte n'a aucun sous-système audio).
 - La capture réelle d'un flux (`MicCapture::from_default_device()` qui reçoit effectivement des échantillons, ou `from_named_device()` sur un nom qui existe vraiment) **n'est pas testée en CI** — ça nécessite un micro physique et une permission OS. Aucun test de ce dépôt ne prétend vérifier ce chemin ; c'est une vérification manuelle à faire sur une machine avec micro avant de s'appuyer dessus en production.
 
+## Ligne de commande
+
+`cargo install capture-helper-rs` installe aussi un binaire `capture-helper-rs` — nommé d'après la
+crate et non d'après la commande `capture-helper` du jumeau Python, pour que les deux
+cohabitent sur un même `PATH` sans que l'un masque l'autre en silence.
+
+```bash
+capture-helper-rs devices
+capture-helper-rs record session.wav --seconds 30
+capture-helper-rs record session.wav --seconds 30 --pcm16
+```
+
+En cas de succès, le résultat sur la sortie standard et un code de retour `0` ;
+en cas d'échec, une ligne sur la sortie d'erreur préfixée `capture-helper-rs: ` et un
+code `1`. Toutes les options et tous les modes d'échec :
+[`skills/capture-helper-rs/references/cli-reference.md`](skills/capture-helper-rs/references/cli-reference.md).
+
+## Skill d'agent
+
+`skills/capture-helper-rs/` empaquette cette crate en **Claude Skill** et en **skill
+OpenCode**, pour qu'un agent la découvre et l'utilise pour le compte de
+l'utilisateur. L'installation pour les deux hôtes est dans
+[`skills/README.md`](skills/README.md).
+
+Son catalogue de déclencheurs est imposé, pas décoratif :
+[`TRIGGERS.md`](TRIGGERS.md) est le catalogue destiné aux humains,
+`references/triggers.md` en est le miroir destiné à l'agent, et
+`tests/skill.rs` fait échouer `cargo test` — donc le hook de pré-push — si les
+deux divergent, si la `description` du skill dépasse le plafond publié de 1024
+caractères, si son `name` cesse de correspondre à son dossier ou s'il pointe
+vers une référence qui n'existe plus.
+
 ## État du projet
 
 Mesure de couverture faite avec [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov), remesurée le 2026-10-02 pour la 0.1.2, sur macOS (outils LLVM fournis par Xcode) :

@@ -17,3 +17,22 @@ categories = ["multimedia::audio", "hardware-support"]
 [dependencies]
 cpal = "0.18"
 thiserror = "2"
+# CLI-only, behind the `cli` feature below: a library consumer should not pay
+# for an argument parser or a WAV writer it never calls.
+clap = { version = "4", features = ["derive"], optional = true }
+hound = { version = "3", optional = true }
+
+[features]
+# On by default so `cargo install capture-helper-rs` produces the binary.
+# Library users who want neither clap nor hound in their graph depend on this
+# crate with `default-features = false`.
+default = ["cli"]
+cli = ["dep:clap", "dep:hound"]
+
+[[bin]]
+# Named after the crate, not after the Python twin's `capture-helper`: the two
+# are meant to coexist on one machine, and identical names would make PATH
+# order decide which one runs.
+name = "capture-helper-rs"
+path = "src/main.rs"
+required-features = ["cli"]

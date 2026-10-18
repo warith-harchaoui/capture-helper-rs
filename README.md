@@ -57,6 +57,35 @@ This environment (and probably yours) has no real microphone attached. Concretel
 - Error paths reachable without hardware **are** tested: asking for a named device that clearly doesn't exist must produce `CaptureHelperError::DeviceNotFound` (or `DeviceEnumeration` if the host has no audio subsystem at all).
 - Actually capturing a stream (`MicCapture::from_default_device()` receiving real samples, or `from_named_device()` on a name that truly exists) **is not tested in CI** — it needs a physical microphone and an OS permission grant. No test in this repository claims to verify that path; it's a manual check to run on a machine with a microphone before relying on it in production.
 
+## Command line
+
+`cargo install capture-helper-rs` also installs a `capture-helper-rs` binary — named after the
+crate, not after the Python twin's `capture-helper`, so the two coexist on one `PATH`
+without either silently shadowing the other.
+
+```bash
+capture-helper-rs devices
+capture-helper-rs record session.wav --seconds 30
+capture-helper-rs record session.wav --seconds 30 --pcm16
+```
+
+Success prints the result on stdout and exits `0`; failure prints one line on
+stderr, prefixed `capture-helper-rs: `, and exits `1`. Every flag and every failure mode:
+[`skills/capture-helper-rs/references/cli-reference.md`](skills/capture-helper-rs/references/cli-reference.md).
+
+## Agent skill
+
+`skills/capture-helper-rs/` packages this crate as a **Claude Skill** and an **OpenCode
+skill**, so an agent can discover it and use it on the user's behalf.
+Installation for both hosts is in [`skills/README.md`](skills/README.md).
+
+Its trigger catalogue is enforced, not decorative: [`TRIGGERS.md`](TRIGGERS.md)
+is the user-facing catalogue, `references/triggers.md` is its agent-facing
+mirror, and `tests/skill.rs` fails `cargo test` — and therefore the pre-push
+hook — if the two drift apart, if the skill's `description` exceeds the
+published 1024-character cap, if its `name` stops matching its folder or if it
+points at a reference that no longer exists.
+
 ## Project status
 
 Coverage measured with [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov), re-measured 2026-10-02 for 0.1.2, on macOS (LLVM tools via Xcode):
