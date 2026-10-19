@@ -4,6 +4,48 @@ All notable changes to `capture-helper-rs` are documented here. The format follo
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.3] — 2026-10-19
+
+### Fixed
+
+- **A consumer slower than the microphone leaked memory instead of reporting
+  anything.** Frames crossed from the realtime callback on an unbounded
+  `mpsc::channel`. A microphone produces audio at exactly realtime, so a
+  consumer even slightly slower never catches up — which makes this not a
+  slowdown but a leak: the backlog grows for as long as capture runs, with no
+  error, no warning, and nothing in this crate's "honest, typed errors" promise
+  to cover it, because there was no error to report.
+
+  The queue is now bounded (`FRAME_QUEUE_CAPACITY`, 256 frames) and refused
+  frames are counted, readable via `MicCapture::dropped_frames()`. Audio is
+  lost either way once a consumer falls behind; being told is the difference
+  between a pipeline that is lossy and one that is lossy without anyone
+  knowing.
+
+  The two "send failed" cases are now distinguished, which matters: a
+  disconnected receiver is `MicCapture` being dropped mid-callback — a normal
+  shutdown race — and is never counted as backpressure. Conflating them would
+  have reported a loss on every clean shutdown.
+
+  Neither path blocks or panics; this is still the audio thread.
+
+### Changed
+
+- `build_stream` takes a `CallbackState` instead of two more `Arc` arguments.
+  The failure flag and the drop counter are one concept — what the audio thread
+  needs to tell the consumer about after the fact, without blocking — and
+  grouping them keeps the signature honest as well as under clippy's argument
+  limit.
+
+### Checked, and found sound
+
+- **Sample-rate reporting.** The stream takes the device's default config and
+  carries that rate on every `MicFrame`, so there is no requested-vs-actual
+  mismatch to get wrong — the consumer is told what it is really receiving.
+- **The i16/u16 conversions.** Divide by 32768.0 rather than `i16::MAX`, with
+  the reason written down: dividing by MAX would send `i16::MIN` to −1.0000305
+  and break the documented [−1.0, 1.0] range.
+
 ## [0.1.2] — 2026-10-02
 
 A dead microphone now ends the loop instead of hanging it.

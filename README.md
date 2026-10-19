@@ -86,6 +86,30 @@ hook — if the two drift apart, if the skill's `description` exceeds the
 published 1024-character cap, if its `name` stops matching its folder or if it
 points at a reference that no longer exists.
 
+## When the consumer falls behind
+
+A microphone produces audio at exactly realtime, so a consumer even slightly
+slower than realtime never catches up. The frame queue is therefore **bounded**
+(256 frames), and frames that do not fit are refused and counted:
+
+```rust
+let capture = MicCapture::from_default_device()?;
+// ... consume frames ...
+if capture.dropped_frames() > 0 {
+    eprintln!("{} frames lost — the consumer is slower than the mic", capture.dropped_frames());
+}
+```
+
+With an unbounded queue this is not a slowdown but a leak: the backlog grows
+for as long as capture runs, with no error and no warning. A bound turns that
+into bounded memory plus a number you can read. Audio is lost either way once a
+consumer falls behind — being told is the difference between a pipeline that is
+lossy and one that is lossy *without anyone knowing*.
+
+Zero is the normal reading. A clean shutdown (dropping `MicCapture`
+mid-callback) is a disconnected receiver, not backpressure, and is never
+counted.
+
 ## Project status
 
 Coverage measured with [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov), re-measured 2026-10-02 for 0.1.2, on macOS (LLVM tools via Xcode):

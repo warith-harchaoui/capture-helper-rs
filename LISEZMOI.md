@@ -89,6 +89,32 @@ deux divergent, si la `description` du skill dépasse le plafond publié de 1024
 caractères, si son `name` cesse de correspondre à son dossier ou s'il pointe
 vers une référence qui n'existe plus.
 
+## Quand le consommateur décroche
+
+Un microphone produit de l'audio exactement en temps réel : un consommateur
+même légèrement plus lent ne rattrape jamais son retard. La file de trames est
+donc **bornée** (256 trames), puis les trames qui n'y tiennent pas sont
+refusées puis comptées :
+
+```rust
+let capture = MicCapture::from_default_device()?;
+// ... consommer les trames ...
+if capture.dropped_frames() > 0 {
+    eprintln!("{} trames perdues — le consommateur est plus lent que le micro", capture.dropped_frames());
+}
+```
+
+Avec une file non bornée, ce n'est pas un ralentissement mais une fuite : le
+retard s'accumule aussi longtemps que dure la capture, sans erreur ni
+avertissement. Une borne transforme cela en mémoire bornée plus un nombre
+lisible. De l'audio est perdu dans les deux cas dès qu'un consommateur
+décroche ; être prévenu fait la différence entre une chaîne qui perd des
+données puis une qui en perd *sans que personne ne le sache*.
+
+Zéro est la lecture normale. Un arrêt propre (`MicCapture` relâché en plein
+callback) est un récepteur déconnecté, pas une saturation : il n'est jamais
+compté.
+
 ## État du projet
 
 Mesure de couverture faite avec [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov), remesurée le 2026-10-02 pour la 0.1.2, sur macOS (outils LLVM fournis par Xcode) :

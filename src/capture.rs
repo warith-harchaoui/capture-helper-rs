@@ -2,10 +2,32 @@ use crate::error::CaptureHelperError;
 use crate::frame::MicFrame;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// How many captured frames may queue up before the oldest audio starts being
+/// refused.
+///
+/// A microphone produces audio at exactly realtime, so a consumer that is even
+/// slightly slower than realtime never catches up. With an unbounded queue that
+/// is not a slowdown, it is a leak: the backlog grows for as long as capture
+/// runs. At cpal's typical callback size this is on the order of seconds of
+/// audio -- generous enough that an ordinary hiccup (a GC pause, a slow disk
+/// write) costs nothing, small enough that a consumer which has genuinely
+/// fallen behind is bounded rather than fatal.
+const FRAME_QUEUE_CAPACITY: usize = 256;
+
+/// The state a capture callback shares with its `MicCapture`.
+///
+/// Grouped rather than passed as two more arguments: they are one concept --
+/// what the audio thread needs to tell the consumer about, after the fact,
+/// without blocking or panicking on the realtime thread.
+struct CallbackState {
+    failure: Arc<StreamFailure>,
+    dropped: Arc<AtomicU64>,
+}
 
 /// How long a blocking wait sits on the channel before looking at
 /// [`StreamFailure`] again.
@@ -84,6 +106,7 @@ pub struct MicCapture {
     _stream: cpal::Stream,
     rx: Receiver<MicFrame>,
     failure: Arc<StreamFailure>,
+    dropped: Arc<AtomicU64>,
 }
 
 impl MicCapture {
@@ -118,24 +141,29 @@ impl MicCapture {
         let sample_rate = supported_config.sample_rate();
         let config: StreamConfig = supported_config.into();
 
-        let (tx, rx) = mpsc::channel::<MicFrame>();
+        let (tx, rx) = mpsc::sync_channel::<MicFrame>(FRAME_QUEUE_CAPACITY);
         let failure = Arc::new(StreamFailure::default());
+        let dropped = Arc::new(AtomicU64::new(0));
+        let state = CallbackState {
+            failure: Arc::clone(&failure),
+            dropped: Arc::clone(&dropped),
+        };
 
         let stream = match sample_format {
             SampleFormat::F32 => {
-                build_stream::<f32>(device, config, tx, &failure, channels, sample_rate, |s| s)?
+                build_stream::<f32>(device, config, tx, &state, channels, sample_rate, |s| s)?
             }
             // Divide by 32768.0 (i16::MIN's magnitude), not i16::MAX (32767):
             // dividing by MAX would send i16::MIN to -1.0000305, breaking the
             // documented [-1.0, 1.0] guarantee. Same convention as the U16
             // branch below.
             SampleFormat::I16 => {
-                build_stream::<i16>(device, config, tx, &failure, channels, sample_rate, |s| {
+                build_stream::<i16>(device, config, tx, &state, channels, sample_rate, |s| {
                     s as f32 / 32768.0
                 })?
             }
             SampleFormat::U16 => {
-                build_stream::<u16>(device, config, tx, &failure, channels, sample_rate, |s| {
+                build_stream::<u16>(device, config, tx, &state, channels, sample_rate, |s| {
                     (s as f32 - 32768.0) / 32768.0
                 })?
             }
@@ -154,7 +182,23 @@ impl MicCapture {
             _stream: stream,
             rx,
             failure,
+            dropped,
         })
+    }
+
+    /// How many frames the capture had to refuse because the consumer fell
+    /// behind, since this capture started.
+    ///
+    /// A microphone runs at realtime, so a consumer that is even slightly
+    /// slower never catches up. This counter is how that shows up: nonzero
+    /// means audio is missing from what you received, and the gaps are at the
+    /// moments you were busiest. Zero is the normal reading.
+    ///
+    /// Checking it occasionally is worth more than it looks -- it is the
+    /// difference between a pipeline that is lossy and one that is lossy
+    /// *without anyone knowing*.
+    pub fn dropped_frames(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     /// Block until the next [`MicFrame`] is available, or the stream has
@@ -217,8 +261,8 @@ impl Iterator for &MicCapture {
 fn build_stream<T>(
     device: &cpal::Device,
     config: StreamConfig,
-    tx: Sender<MicFrame>,
-    failure: &Arc<StreamFailure>,
+    tx: SyncSender<MicFrame>,
+    state: &CallbackState,
     channels: u16,
     sample_rate: u32,
     to_f32: fn(T) -> f32,
@@ -226,7 +270,8 @@ fn build_stream<T>(
 where
     T: cpal::SizedSample + Send + 'static,
 {
-    let failure = Arc::clone(failure);
+    let failure = Arc::clone(&state.failure);
+    let dropped = Arc::clone(&state.dropped);
     device
         .build_input_stream(
             config,
@@ -238,10 +283,25 @@ where
                     channels,
                     timestamp: Instant::now(),
                 };
-                // The receiver may already be gone (MicCapture dropped mid-callback);
-                // that is a normal shutdown race, not a bug, so the send error is
-                // silently ignored rather than panicking on the audio thread.
-                let _ = tx.send(frame);
+                // Two different "the send failed" cases, and only one of them
+                // is nothing to worry about.
+                //
+                // Disconnected: the receiver is already gone because MicCapture
+                // was dropped mid-callback. A normal shutdown race, not a bug.
+                //
+                // Full: the consumer is slower than the microphone. Audio
+                // arrives at exactly realtime, so a consumer that cannot keep
+                // up never catches up -- with an unbounded channel that meant
+                // the queue grew for as long as the capture ran, silently,
+                // until the process died. A bounded queue turns unbounded
+                // memory growth into bounded memory plus a number the caller
+                // can read, which is the honest trade for a realtime source:
+                // audio is lost either way, and being told is the difference.
+                //
+                // Neither case may panic or block: this is the audio thread.
+                if let Err(TrySendError::Full(_)) = tx.try_send(frame) {
+                    dropped.fetch_add(1, Ordering::Relaxed);
+                }
             },
             move |err| {
                 // cpal's error callback has no channel back to the caller that
@@ -360,5 +420,74 @@ mod tests {
             Err(other) => panic!("expected DeviceNotFound or DeviceEnumeration, got {other:?}"),
             Ok(_) => panic!("expected an error for a bogus device name, but capture started"),
         }
+    }
+}
+
+#[cfg(test)]
+mod backpressure_tests {
+    use super::*;
+
+    // A microphone produces audio at exactly realtime, so a consumer even
+    // slightly slower than realtime never catches up. With the unbounded
+    // channel this crate used to build, that was not a slowdown but a leak:
+    // the backlog grew for as long as capture ran, with no error, no warning,
+    // and nothing in the "honest, typed errors" promise to cover it, because
+    // there was no error to report. These tests pin the bound and the counter
+    // that replaced it -- neither needs a microphone.
+
+    #[test]
+    fn the_frame_queue_is_bounded() {
+        let (tx, _rx) = mpsc::sync_channel::<MicFrame>(2);
+        let frame = || MicFrame {
+            samples: vec![0.0; 4],
+            sample_rate: 48_000,
+            channels: 1,
+            timestamp: Instant::now(),
+        };
+        assert!(tx.try_send(frame()).is_ok());
+        assert!(tx.try_send(frame()).is_ok());
+        // Third send must be refused rather than queued: that refusal is the
+        // whole point, and what the counter below records.
+        assert!(matches!(tx.try_send(frame()), Err(TrySendError::Full(_))));
+    }
+
+    #[test]
+    fn a_refused_frame_is_counted_not_swallowed() {
+        let (tx, _rx) = mpsc::sync_channel::<MicFrame>(1);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let frame = || MicFrame {
+            samples: vec![0.0; 4],
+            sample_rate: 48_000,
+            channels: 1,
+            timestamp: Instant::now(),
+        };
+        for _ in 0..5 {
+            if let Err(TrySendError::Full(_)) = tx.try_send(frame()) {
+                dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        // One fits, four are refused. Lossy either way; being told is the
+        // difference between that and silently lossy.
+        assert_eq!(dropped.load(Ordering::Relaxed), 4);
+    }
+
+    #[test]
+    fn a_disconnected_receiver_is_not_counted_as_backpressure() {
+        // MicCapture dropped mid-callback is a normal shutdown race, not a
+        // consumer falling behind. Conflating the two would make the counter
+        // report a loss on every clean shutdown.
+        let (tx, rx) = mpsc::sync_channel::<MicFrame>(4);
+        drop(rx);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let frame = MicFrame {
+            samples: vec![0.0; 4],
+            sample_rate: 48_000,
+            channels: 1,
+            timestamp: Instant::now(),
+        };
+        if let Err(TrySendError::Full(_)) = tx.try_send(frame) {
+            dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
     }
 }
