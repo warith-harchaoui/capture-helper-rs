@@ -23,6 +23,10 @@ This is not a line-by-line port. The camera half of the original (`iter_camera_f
 - No resampling, no mono/stereo conversion, no voice-activity detection: `MicFrame` delivers exactly what the device gives, normalized to `f32`, nothing more.
 - No device selection by index or name substring (exact name or default device only).
 
+## How it works
+
+![How capture-helper-rs works: a microphone in, a stream of typed f32 frames out](https://raw.githubusercontent.com/warith-harchaoui/capture-helper-rs/master/assets/diagrams/how-it-works.png)
+
 ## Example
 
 ```rust

@@ -12,16 +12,20 @@ Ce n'est pas un portage ligne à ligne. Le volet caméra du projet d'origine (`i
 
 - `list_input_devices() -> Result<Vec<String>, CaptureHelperError>` : énumère les périphériques d'entrée audio du système via [`cpal`](https://crates.io/crates/cpal). Une liste vide est une réponse honnête (aucun micro branché) ; seule une vraie panne d'énumération de l'hôte renvoie une erreur.
 - `default_input_device_name() -> Option<String>` : quel micro `MicCapture::from_default_device()` ouvrirait, sans l'ouvrir. `None` est l'état ordinaire d'une machine sans périphérique audio, pas une panne. À afficher seulement : rien ne garantit que ce nom figure dans `list_input_devices()` (sur ALSA, il n'y figure pas), donc ouvrez le périphérique par défaut avec `from_default_device()` plutôt qu'en passant ce nom à `from_named_device()`.
-- `MicCapture` : ouvre un flux micro (périphérique par défaut ou nommé) et le diffuse comme un itérateur de `MicFrame` — bloquant via `for frame in &mic { ... }` / `next_frame()`, ou non bloquant via `try_next_frame()`. Itérer par référence conserve la poignée, donc `mic.error()` peut encore dire pourquoi le flux s'est arrêté ; itérer par valeur emporte cette réponse avec la poignée.
+- `MicCapture` : ouvre un flux micro (périphérique par défaut ou nommé) et le diffuse comme un itérateur de `MicFrame` — bloquant via `for frame in &mic { ... }` / `next_frame()` ou non bloquant via `try_next_frame()`. Itérer par référence conserve la poignée, donc `mic.error()` peut encore dire pourquoi le flux s'est arrêté ; itérer par valeur emporte cette réponse avec la poignée.
 - `MicCapture::error() -> Option<String>` : l'erreur du périphérique qui a mis fin à la capture, s'il y en a eu une. `cpal` signale les pannes de flux via un callback sans chemin de retour vers l'appelant : le message est donc rendu ici plutôt qu'imprimé sur stderr. Un flux en panne termine l'itération au lieu de la bloquer (corrigé en 0.1.2).
 - `MicFrame { samples: Vec<f32>, sample_rate: u32, channels: u16, timestamp: Instant }` : un paquet PCM normalisé en `f32` dans `[-1.0, 1.0]`, quel que soit le format natif du périphérique (`f32`, `i16`, `u16`).
 - `CaptureHelperError` (via `thiserror`) : une variante distincte par cause d'échec — aucun périphérique par défaut, nom introuvable, échec d'énumération, échec de lecture de configuration, format d'échantillon non supporté, échec de construction ou de démarrage du flux. Pas de fourre-tout `String`.
 
-## Ce que ce crate ne fait pas (encore, ou pas du tout)
+## Ce que ce crate ne fait pas (encore ou pas du tout)
 
 - Pas de caméra, pas d'images, pas de GUI — ce volet du projet d'origine reste là-bas.
 - Pas de rééchantillonnage, pas de conversion mono/stéréo, pas de détection d'activité vocale : `MicFrame` livre exactement ce que le périphérique donne, normalisé en `f32`, rien de plus.
 - Pas de sélection de périphérique par indice ou sous-chaîne de nom (seulement nom exact ou périphérique par défaut).
+
+## Comment ça marche
+
+![Comment capture-helper-rs fonctionne : un micro en entrée, un flux de trames f32 typées en sortie](https://raw.githubusercontent.com/warith-harchaoui/capture-helper-rs/master/assets/diagrams/comment-ca-marche.png)
 
 ## Exemple
 
@@ -55,7 +59,7 @@ Cet environnement (et probablement le vôtre) n'a pas de microphone réel branch
 
 - `list_input_devices()` **est** testé : il doit toujours retourner un `Vec` (potentiellement vide) sans jamais paniquer.
 - Les chemins d'erreur atteignables sans matériel **sont** testés : demander un périphérique nommé qui n'existe manifestement pas doit produire `CaptureHelperError::DeviceNotFound` (ou `DeviceEnumeration` si l'hôte n'a aucun sous-système audio).
-- La capture réelle d'un flux (`MicCapture::from_default_device()` qui reçoit effectivement des échantillons, ou `from_named_device()` sur un nom qui existe vraiment) **n'est pas testée en CI** — ça nécessite un micro physique et une permission OS. Aucun test de ce dépôt ne prétend vérifier ce chemin ; c'est une vérification manuelle à faire sur une machine avec micro avant de s'appuyer dessus en production.
+- La capture réelle d'un flux (`MicCapture::from_default_device()` qui reçoit effectivement des échantillons ou `from_named_device()` sur un nom qui existe vraiment) **n'est pas testée en CI** — ça nécessite un micro physique et une permission OS. Aucun test de ce dépôt ne prétend vérifier ce chemin ; c'est une vérification manuelle à faire sur une machine avec micro avant de s'appuyer dessus en production.
 
 ## Ligne de commande
 
@@ -128,7 +132,7 @@ Mesure de couverture faite avec [`cargo-llvm-cov`](https://github.com/taiki-e/ca
 
 `capture.rs` a à peu près triplé en 0.1.2 : la machinerie de panne de flux qu'il a gagnée est volontairement autonome, donc testable sans micro. Ce qui reste non couvert est la partie qui en exige réellement un — voir la section ci-dessus.
 
-Le chiffre global est bas parce que l'essentiel du code non couvert dans `capture.rs` est exactement le chemin décrit ci-dessus (construction et lecture réelle du flux `cpal`) : il ne peut pas être exercé sans microphone physique, et ce crate ne simule pas un faux périphérique juste pour gonfler un pourcentage. `error.rs` et `devices.rs` — le code atteignable sans matériel — sont couverts à 92–100%.
+Le chiffre global est bas parce que l'essentiel du code non couvert dans `capture.rs` est exactement le chemin décrit ci-dessus (construction et lecture réelle du flux `cpal`) : il ne peut pas être exercé sans microphone physique et ce crate ne simule pas un faux périphérique juste pour gonfler un pourcentage. `error.rs` et `devices.rs` — le code atteignable sans matériel — sont couverts à 92–100%.
 
 Pour reproduire :
 
@@ -161,10 +165,10 @@ cargo test --all
 scripts/check-fresh-resolve.sh   # compile sans Cargo.lock, comme un consommateur en aval
 ```
 
-Le dernier existe parce que les trois autres, et la CI, compilent tous contre le
+Le dernier existe parce que les trois autres et la CI, compilent tous contre le
 `Cargo.lock` commité — que personne n'utilise en aval du crate publié. Un intervalle de
 dépendance devenu mauvais reste vert ici tout en cassant chaque `cargo add` / `cargo
-install` neuf, et `cargo publish --dry-run` ne le voit pas non plus (il vérifie avec le
+install` neuf et `cargo publish --dry-run` ne le voit pas non plus (il vérifie avec le
 même lock). La CI lance ce contrôle une fois, sous Linux.
 
 ## Projets liés
