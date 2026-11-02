@@ -33,11 +33,16 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod accel;
 mod capture;
 mod devices;
 mod error;
 mod frame;
 
+pub use accel::{
+    BUFFER_FRAMES_ENV, CaptureOptions, HOST_ENV, RateRange, SAMPLE_RATE_ENV, UnknownHost,
+    UnsupportedRate,
+};
 pub use capture::MicCapture;
 pub use devices::{default_input_device_name, list_input_devices};
 pub use error::CaptureHelperError;

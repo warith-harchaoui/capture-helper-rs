@@ -141,6 +141,49 @@ export LLVM_PROFDATA=$(xcrun --find llvm-profdata)
 cargo llvm-cov --summary-only
 ```
 
+## Opening the microphone on the system's own path
+
+There is no accelerator to pick here, and it is worth saying that plainly instead of inventing
+one: capture is not compute. The audio arrives at exactly real time whatever the hardware, and
+the only thing that can be wrong is the *path* it travels. That path is the device's own
+default configuration, which is what this crate opens:
+
+- **The native host** — CoreAudio on macOS, WASAPI on Windows, ALSA (and through it PulseAudio
+  or PipeWire) on Linux. No PortAudio, no `ffmpeg`, nothing extra to install.
+- **The device's own rate and format.** Ask a 48 kHz microphone for 16 kHz and the operating
+  system inserts a resampler you did not choose, in a layer you cannot see, before you receive
+  a single sample. Opening the device's rate skips it; resampling afterwards is at least yours
+  and visible.
+- **The driver's own buffer size** — the compromise the platform chose between latency and
+  wake-ups.
+
+What is configurable is exactly those three, because "best for this machine" is not "best for
+every use": live transcription wants a small fixed buffer, a long unattended recording wants a
+large one.
+
+```sh
+capture-helper-rs record out.wav --seconds 10 --sample-rate 48000 --buffer-frames 256
+capture-helper-rs record out.wav --seconds 10 --host coreaudio --device "Yeti Nano"
+CAPTURE_HELPER_SAMPLE_RATE=48000 capture-helper-rs record out.wav --seconds 10
+```
+
+```rust
+let mic = MicCapture::from_options(&CaptureOptions {
+    sample_rate: Some(48_000),
+    buffer_frames: Some(256),
+    ..Default::default()
+})?;
+```
+
+A field set in code beats the environment; the environment is for pinning a machine, not for
+overruling a caller who was specific.
+
+**A rate the device cannot produce is an error, not a quiet resample.** The message names what
+the device does offer. A hidden resampler on the capture path is how a recording ends up subtly
+worse than its source with nothing in the logs to say so. A *buffer* request is clamped
+instead, because it changes timing rather than data, and the driver is entitled to the last
+word on that.
+
 ## Installation
 
 ```toml

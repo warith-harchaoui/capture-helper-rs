@@ -146,6 +146,50 @@ export LLVM_PROFDATA=$(xcrun --find llvm-profdata)
 cargo llvm-cov --summary-only
 ```
 
+## Ouvrir le micro par le chemin du système
+
+Il n'y a pas d'accélérateur à choisir ici, et mieux vaut le dire franchement que d'en inventer
+un : la captation n'est pas du calcul. L'audio arrive exactement en temps réel quel que soit le
+matériel, et la seule chose qui puisse être fausse, c'est le *chemin* qu'il emprunte. Ce chemin,
+c'est la configuration par défaut du périphérique, et c'est ce que cette caisse ouvre :
+
+- **L'hôte natif** — CoreAudio sur macOS, WASAPI sur Windows, ALSA (et à travers lui PulseAudio
+  ou PipeWire) sur Linux. Pas de PortAudio, pas de `ffmpeg`, rien à installer en plus.
+- **La fréquence et le format du périphérique.** Demandez 16 kHz à un micro qui tourne à
+  48 kHz, et le système insère un rééchantillonneur que vous n'avez pas choisi, dans une couche
+  que vous ne voyez pas, avant même le premier échantillon. Ouvrir la fréquence du périphérique
+  l'évite ; rééchantillonner ensuite est au moins le vôtre, et visible.
+- **La taille de tampon du pilote** — le compromis que la plateforme a choisi entre latence et
+  réveils.
+
+Ce qui se règle, c'est exactement ces trois choses, parce que « le mieux pour cette machine »
+n'est pas « le mieux pour tous les usages » : la transcription en direct veut un petit tampon
+fixe, un enregistrement long et sans surveillance en veut un grand.
+
+```sh
+capture-helper-rs record out.wav --seconds 10 --sample-rate 48000 --buffer-frames 256
+capture-helper-rs record out.wav --seconds 10 --host coreaudio --device "Yeti Nano"
+CAPTURE_HELPER_SAMPLE_RATE=48000 capture-helper-rs record out.wav --seconds 10
+```
+
+```rust
+let mic = MicCapture::from_options(&CaptureOptions {
+    sample_rate: Some(48_000),
+    buffer_frames: Some(256),
+    ..Default::default()
+})?;
+```
+
+Un champ posé dans le code gagne sur l'environnement ; l'environnement sert à épingler une
+machine, pas à contredire un appelant qui a été précis.
+
+**Une fréquence que le périphérique ne sait pas produire est une erreur, pas un
+rééchantillonnage discret.** Le message nomme ce que le périphérique offre vraiment. Un
+rééchantillonneur caché sur le chemin de captation, c'est ainsi qu'un enregistrement finit
+légèrement moins bon que sa source sans que rien ne le signale. Une demande de *tampon*, elle,
+est ramenée dans les bornes du pilote : elle change le minutage, pas les données, et le pilote a
+le dernier mot là-dessus.
+
 ## Installation
 
 ```toml

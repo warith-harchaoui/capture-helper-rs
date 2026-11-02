@@ -1,3 +1,4 @@
+use crate::accel::CaptureOptions;
 use crate::error::CaptureHelperError;
 use crate::frame::MicFrame;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -112,11 +113,30 @@ pub struct MicCapture {
 impl MicCapture {
     /// Start capturing from the host's default input device.
     pub fn from_default_device() -> Result<Self, CaptureHelperError> {
-        let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or(CaptureHelperError::NoInputDevice)?;
-        Self::from_device(&device)
+        Self::from_options(&CaptureOptions::default())
+    }
+
+    /// Start capturing with an explicit host, device, sample rate or buffer
+    /// size — anything left `None` keeps the machine's own choice, which is the
+    /// path with no hidden resampler in it.
+    ///
+    /// Unset fields are filled from the environment ([`HOST_ENV`],
+    /// [`SAMPLE_RATE_ENV`], [`BUFFER_FRAMES_ENV`]) so a machine can be pinned
+    /// without touching code; a field set here always wins over the environment.
+    pub fn from_options(options: &CaptureOptions) -> Result<Self, CaptureHelperError> {
+        let options = options.clone().with_env();
+        let host = open_host(options.host.as_deref())?;
+        let device = match options.device.as_deref() {
+            Some(name) => host
+                .input_devices()
+                .map_err(|e| CaptureHelperError::DeviceEnumeration(e.to_string()))?
+                .find(|d| d.to_string() == name)
+                .ok_or_else(|| CaptureHelperError::DeviceNotFound(name.to_string()))?,
+            None => host
+                .default_input_device()
+                .ok_or(CaptureHelperError::NoInputDevice)?,
+        };
+        Self::from_device_with(&device, &options)
     }
 
     /// Start capturing from the input device whose `cpal` name matches `name`
@@ -133,13 +153,35 @@ impl MicCapture {
     }
 
     fn from_device(device: &cpal::Device) -> Result<Self, CaptureHelperError> {
+        Self::from_device_with(device, &CaptureOptions::default())
+    }
+
+    fn from_device_with(
+        device: &cpal::Device,
+        options: &CaptureOptions,
+    ) -> Result<Self, CaptureHelperError> {
         let supported_config = device
             .default_input_config()
             .map_err(|e| CaptureHelperError::StreamConfig(e.to_string()))?;
         let sample_format = supported_config.sample_format();
         let channels = supported_config.channels();
-        let sample_rate = supported_config.sample_rate();
-        let config: StreamConfig = supported_config.into();
+        let default_rate = supported_config.sample_rate();
+        let mut config: StreamConfig = supported_config.into();
+
+        // A requested rate the device cannot produce is refused here rather than
+        // handed to the operating system, which would insert a resampler nobody
+        // asked for and nothing would report.
+        let rate =
+            crate::accel::choose_rate(options.sample_rate, default_rate, &advertised_rates(device))
+                .map_err(|e| CaptureHelperError::StreamConfig(e.to_string()))?;
+        config.sample_rate = rate;
+        let sample_rate = config.sample_rate;
+
+        if let Some(frames) =
+            crate::accel::choose_buffer_frames(options.buffer_frames, advertised_buffer(device))
+        {
+            config.buffer_size = cpal::BufferSize::Fixed(frames);
+        }
 
         let (tx, rx) = mpsc::sync_channel::<MicFrame>(FRAME_QUEUE_CAPACITY);
         let failure = Arc::new(StreamFailure::default());
@@ -421,6 +463,40 @@ mod tests {
             Ok(_) => panic!("expected an error for a bogus device name, but capture started"),
         }
     }
+
+    #[test]
+    fn an_unknown_host_is_refused_by_name() {
+        // Runs anywhere: the host list is a property of the build, not of the
+        // machine's hardware, so this needs no microphone.
+        let err = MicCapture::from_options(&CaptureOptions {
+            host: Some("bogus-host".to_string()),
+            ..Default::default()
+        });
+        let Err(err) = err else {
+            panic!("a host that does not exist must not open silently")
+        };
+        assert!(err.to_string().contains("bogus-host"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_device_is_refused_by_name() {
+        let outcome = MicCapture::from_options(&CaptureOptions {
+            device: Some("Pas Un Micro".to_string()),
+            ..Default::default()
+        });
+        // `DeviceNotFound` on a machine with an audio subsystem, `DeviceEnumeration`
+        // on a headless one — either way, named and not a silent default device.
+        let Err(err) = outcome else {
+            panic!("a device that does not exist must not fall back")
+        };
+        assert!(
+            matches!(
+                err,
+                CaptureHelperError::DeviceNotFound(_) | CaptureHelperError::DeviceEnumeration(_)
+            ),
+            "{err}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -490,4 +566,53 @@ mod backpressure_tests {
         }
         assert_eq!(dropped.load(Ordering::Relaxed), 0);
     }
+}
+
+/// Opens the named audio host, or the platform's own when nothing is named.
+///
+/// On nearly every build `cpal::available_hosts()` has one entry — the native
+/// one — because JACK and ASIO are compile-time features. Naming a host is for
+/// the builds where that is not true.
+fn open_host(requested: Option<&str>) -> Result<cpal::Host, CaptureHelperError> {
+    let ids = cpal::available_hosts();
+    let names: Vec<&str> = ids.iter().map(|id| id.name()).collect();
+    let chosen = crate::accel::choose_host(requested, &names)
+        .map_err(|e| CaptureHelperError::DeviceEnumeration(e.to_string()))?;
+    match chosen {
+        None => Ok(cpal::default_host()),
+        Some(name) => {
+            let id = ids
+                .iter()
+                .find(|id| id.name() == name)
+                .copied()
+                .ok_or_else(|| CaptureHelperError::DeviceEnumeration(name.to_string()))?;
+            cpal::host_from_id(id).map_err(|e| CaptureHelperError::DeviceEnumeration(e.to_string()))
+        }
+    }
+}
+
+/// The sample-rate spans a device advertises, flattened for [`crate::accel`].
+/// An empty list is not a failure: some drivers advertise nothing useful and
+/// still run at their default, which `choose_rate` accounts for.
+fn advertised_rates(device: &cpal::Device) -> Vec<crate::accel::RateRange> {
+    device
+        .supported_input_configs()
+        .map(|configs| {
+            configs
+                .map(|c| crate::accel::RateRange {
+                    min: c.min_sample_rate(),
+                    max: c.max_sample_rate(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The buffer-size span the driver advertises, if it advertises one at all.
+fn advertised_buffer(device: &cpal::Device) -> Option<(u32, u32)> {
+    let configs = device.supported_input_configs().ok()?;
+    configs.into_iter().find_map(|c| match c.buffer_size() {
+        cpal::SupportedBufferSize::Range { min, max } => Some((*min, *max)),
+        cpal::SupportedBufferSize::Unknown => None,
+    })
 }

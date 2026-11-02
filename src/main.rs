@@ -16,7 +16,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use capture_helper_rs::{MicCapture, default_input_device_name, list_input_devices};
+use capture_helper_rs::{
+    CaptureOptions, MicCapture, default_input_device_name, list_input_devices,
+};
 use clap::{Parser, Subcommand};
 
 /// Turn a live microphone into PCM, from the command line.
@@ -41,6 +43,18 @@ enum Command {
         /// Device name from `devices`; omit to use the system default.
         #[arg(long)]
         device: Option<String>,
+        /// Audio host to open (`coreaudio`, `wasapi`, `alsa`, `jack`...).
+        /// Omit for the platform's own, which is what you want.
+        #[arg(long)]
+        host: Option<String>,
+        /// Capture sample rate in Hz. Omit for the device's own rate — asking
+        /// for another one is refused rather than silently resampled by the OS.
+        #[arg(long)]
+        sample_rate: Option<u32>,
+        /// Capture buffer size in frames: smaller is lower latency and more
+        /// wake-ups. Omit for the driver's own compromise.
+        #[arg(long)]
+        buffer_frames: Option<u32>,
         /// Write 16-bit integer samples instead of 32-bit float.
         ///
         /// Float is the default because it is exactly what the device handed
@@ -61,8 +75,19 @@ fn main() -> ExitCode {
             output,
             seconds,
             device,
+            host,
+            sample_rate,
+            buffer_frames,
             pcm16,
-        } => record(&output, seconds, device.as_deref(), pcm16),
+        } => record(
+            &output,
+            seconds,
+            device.as_deref(),
+            host.as_deref(),
+            sample_rate,
+            buffer_frames,
+            pcm16,
+        ),
     };
 
     match outcome {
@@ -103,19 +128,25 @@ fn devices() -> Result<String, String> {
 /// looking its name up: on ALSA the default's reported name does not appear in
 /// the enumeration at all, so round-tripping it through `from_named_device`
 /// would fail on exactly the machines where it matters.
+#[allow(clippy::too_many_arguments)]
 fn record(
     output: &PathBuf,
     seconds: f64,
     device: Option<&str>,
+    host: Option<&str>,
+    sample_rate: Option<u32>,
+    buffer_frames: Option<u32>,
     pcm16: bool,
 ) -> Result<String, String> {
     if seconds <= 0.0 {
         return Err(format!("--seconds must be positive, got {seconds}"));
     }
-    let mic = match device {
-        Some(name) => MicCapture::from_named_device(name),
-        None => MicCapture::from_default_device(),
-    }
+    let mic = MicCapture::from_options(&CaptureOptions {
+        host: host.map(str::to_string),
+        device: device.map(str::to_string),
+        sample_rate,
+        buffer_frames,
+    })
     .map_err(|e| e.to_string())?;
 
     // The first frame carries the stream's real format; cpal picks it, we do
