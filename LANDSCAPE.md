@@ -1,6 +1,6 @@
 # Landscape
 
-[🇫🇷 PAYSAGE.md](https://github.com/warith-harchaoui/capture-helper-rs/blob/master/PAYSAGE.md) · 🇬🇧 English
+[🇫🇷 PAYSAGE.md](https://github.com/warith-harchaoui/capture-helper-rs/blob/main/PAYSAGE.md) · 🇬🇧 English
 
 Related and competing crates in the "live microphone capture in Rust" space, benchmarked against `capture-helper-rs`.
 Ratings are ⭐ (1) to ⭐⭐⭐⭐⭐ (5), scored on `capture-helper-rs`'s intended job:

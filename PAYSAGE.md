@@ -1,6 +1,6 @@
 # Paysage
 
-🇫🇷 Français · [🇬🇧 LANDSCAPE.md](https://github.com/warith-harchaoui/capture-helper-rs/blob/master/LANDSCAPE.md)
+🇫🇷 Français · [🇬🇧 LANDSCAPE.md](https://github.com/warith-harchaoui/capture-helper-rs/blob/main/LANDSCAPE.md)
 
 Crates voisins puis concurrents dans l'espace « capture micro en direct en Rust », comparés à `capture-helper-rs`. Les notes
 vont de ⭐ (1) à ⭐⭐⭐⭐⭐ (5), évaluées sur la tâche visée par `capture-helper-rs` :
