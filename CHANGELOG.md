@@ -4,6 +4,28 @@ All notable changes to `capture-helper-rs` are documented here. The format follo
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-11-04
+
+The capture path could already only be the native one; now it can be chosen,
+and a request the device cannot honour is said rather than papered over.
+Additions only, nothing removed.
+
+### Added
+- **`MicCapture::from_options(&CaptureOptions)`** opens a named audio host,
+  device, sample rate or buffer size, and keeps the machine's own choice for
+  every field left `None`.
+- **A sample rate the device cannot produce is an error** naming the ranges it
+  does offer (`UnsupportedRate`, `RateRange`), instead of a resampler the
+  operating system inserts where nothing reports it. A buffer size is clamped
+  into the driver's advertised range instead, because it changes timing, not
+  data. An unknown host is an error listing the available ones (`UnknownHost`).
+- **Environment pinning**: `CAPTURE_HELPER_HOST`, `CAPTURE_HELPER_SAMPLE_RATE`
+  and `CAPTURE_HELPER_BUFFER_FRAMES` (`HOST_ENV`, `SAMPLE_RATE_ENV`,
+  `BUFFER_FRAMES_ENV`) fill any field left unset, for `from_options` and
+  `from_default_device`; a field set in code always wins.
+  `CaptureOptions::with_lookup` exposes that merge rule over any source.
+- `record` takes `--host`, `--sample-rate` and `--buffer-frames`.
+
 ## [0.1.3] — 2026-10-19
 
 ### Fixed

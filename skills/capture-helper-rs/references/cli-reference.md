@@ -31,13 +31,26 @@ get the default.
 ## `record`
 
 ```
-capture-helper-rs record <OUTPUT> --seconds N [--device NAME] [--pcm16]
+capture-helper-rs record <OUTPUT> --seconds N [--device NAME] [--host NAME]
+    [--sample-rate HZ] [--buffer-frames N] [--pcm16]
 ```
 
 Records for `N` seconds and prints the written path.
 
 - `--device` takes a name from `devices`; omit it for the system default.
+- `--host` opens another audio host (`coreaudio`, `wasapi`, `alsa`, `jack`...);
+  omit it for the platform's own. An unknown host is an error naming the
+  available ones.
+- `--sample-rate` asks the device for that rate. A rate the device cannot
+  produce is an error naming what it offers, never a resample inserted by the
+  operating system. Omit it for the device's own rate.
+- `--buffer-frames` sets the capture buffer size. It is clamped into the range
+  the driver advertises rather than refused: it changes timing, not data.
 - `--pcm16` writes 16-bit integer samples instead of 32-bit float.
+
+Unset, `--host`, `--sample-rate` and `--buffer-frames` fall back to
+`CAPTURE_HELPER_HOST`, `CAPTURE_HELPER_SAMPLE_RATE` and
+`CAPTURE_HELPER_BUFFER_FRAMES`; a flag always wins over the environment.
 
 **On the sample format.** Float is the default because it is exactly what the
 device handed over, with no quantisation step on the way out. Some readers only
@@ -48,9 +61,10 @@ clamped to `[-1, 1]` before scaling: a device can hand back a value slightly
 outside that range, and wrapping it into `i16` turns a loud peak into a loud
 click.
 
-**The WAV's format follows the device, not a flag.** `cpal` picks the sample
-rate and channel count; the header cannot be written until the first frame
-arrives and says what they are.
+**The WAV's format follows the stream.** The channel count is the device's,
+and the sample rate is the device's own unless `--sample-rate` asked for
+another one it supports; the header is written once the first frame arrives
+and says what they are.
 
 **If the device disappears mid-recording**, what was captured is finalised and
 kept, and the command exits `1` with a message naming both the reason and the

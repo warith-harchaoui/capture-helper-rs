@@ -23,6 +23,7 @@ camera half of the Python twin is not here.
 | What microphones exist | `devices` | `list_input_devices` |
 | Which is the default | marked `*` in `devices` | `default_input_device_name` |
 | Capture live audio | `record` | `MicCapture`, `MicFrame` |
+| Pick host, rate or buffer | `record --host --sample-rate --buffer-frames` | `MicCapture::from_options`, `CaptureOptions` |
 
 `MicCapture` is the real surface; `record` is one use of it.
 
@@ -42,6 +43,14 @@ if let Some(why) = mic.error() { eprintln!("capture ended: {why}"); }
 
 Iterate **by reference**. Iterating by value consumes the handle, and with it
 the only way to ask why the stream ended.
+
+`MicCapture::from_options(&CaptureOptions { sample_rate: Some(48_000), ..Default::default() })`
+opens a named host, device, rate or buffer size and keeps the machine's own
+choice for anything left `None`. Unset fields fall back to
+`CAPTURE_HELPER_HOST`, `CAPTURE_HELPER_SAMPLE_RATE` and
+`CAPTURE_HELPER_BUFFER_FRAMES` (so does `from_default_device`); a field set in
+code always wins. A rate the device cannot produce is an error naming what it
+offers, not a hidden resample; a buffer size is clamped to the driver's range.
 
 ## Three things that look like bugs and are not
 

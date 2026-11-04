@@ -25,7 +25,7 @@ This is not a line-by-line port. The camera half of the original (`iter_camera_f
 
 ## How it works
 
-![How capture-helper-rs works: a microphone in, a stream of typed f32 frames out](https://raw.githubusercontent.com/warith-harchaoui/capture-helper-rs/master/assets/diagrams/how-it-works.png)
+![How capture-helper-rs works: a microphone in, a stream of typed f32 frames out](https://raw.githubusercontent.com/warith-harchaoui/capture-helper-rs/main/assets/diagrams/how-it-works.png)
 
 ## Example
 
@@ -188,7 +188,7 @@ word on that.
 
 ```toml
 [dependencies]
-capture-helper-rs = "0.1"
+capture-helper-rs = "0.2"
 ```
 
 Requires Rust 1.85 or newer. `cpal` handles CoreAudio (macOS), WASAPI (Windows), and ALSA/PulseAudio/JACK/PipeWire (Linux) natively — no separate `ffmpeg`/`PortAudio` install needed.

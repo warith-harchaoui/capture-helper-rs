@@ -25,7 +25,7 @@ Ce n'est pas un portage ligne à ligne. Le volet caméra du projet d'origine (`i
 
 ## Comment ça marche
 
-![Comment capture-helper-rs fonctionne : un micro en entrée, un flux de trames f32 typées en sortie](https://raw.githubusercontent.com/warith-harchaoui/capture-helper-rs/master/assets/diagrams/comment-ca-marche.png)
+![Comment capture-helper-rs fonctionne : un micro en entrée, un flux de trames f32 typées en sortie](https://raw.githubusercontent.com/warith-harchaoui/capture-helper-rs/main/assets/diagrams/comment-ca-marche.png)
 
 ## Exemple
 
@@ -194,7 +194,7 @@ le dernier mot là-dessus.
 
 ```toml
 [dependencies]
-capture-helper-rs = "0.1"
+capture-helper-rs = "0.2"
 ```
 
 Prérequis : Rust 1.85 ou plus récent. `cpal` gère nativement CoreAudio (macOS), WASAPI (Windows) et ALSA/PulseAudio/JACK/PipeWire (Linux) — pas de dépendance externe type `ffmpeg` ou `PortAudio` à installer séparément.

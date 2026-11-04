@@ -120,8 +120,8 @@ impl MicCapture {
     /// size — anything left `None` keeps the machine's own choice, which is the
     /// path with no hidden resampler in it.
     ///
-    /// Unset fields are filled from the environment ([`HOST_ENV`],
-    /// [`SAMPLE_RATE_ENV`], [`BUFFER_FRAMES_ENV`]) so a machine can be pinned
+    /// Unset fields are filled from the environment ([`HOST_ENV`](crate::HOST_ENV),
+    /// [`SAMPLE_RATE_ENV`](crate::SAMPLE_RATE_ENV), [`BUFFER_FRAMES_ENV`](crate::BUFFER_FRAMES_ENV)) so a machine can be pinned
     /// without touching code; a field set here always wins over the environment.
     pub fn from_options(options: &CaptureOptions) -> Result<Self, CaptureHelperError> {
         let options = options.clone().with_env();
