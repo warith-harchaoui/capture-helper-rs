@@ -6,13 +6,15 @@
 
 Réécriture en Rust du volet microphone de [`capture-helper`](https://github.com/warith-harchaoui/capture-helper) : transformer un microphone en direct en un flux de petits paquets audio (PCM, l'échantillonnage brut non compressé) exploitables par le reste d'une chaîne de traitement, sans dépendre d'un service tiers.
 
-Ce n'est pas un portage ligne à ligne. Le volet caméra du projet d'origine (`iter_camera_frames`, la GUI de scènes multi-sources, le mixage vidéo) est hors périmètre pour cette version 0.1 : seul le microphone est couvert.
+Ce n'est pas un portage ligne à ligne. Le volet caméra du projet d'origine (`iter_camera_frames`, la GUI de scènes multi-sources, le mixage vidéo) est hors périmètre : seul le microphone est couvert.
 
-## Ce que fait ce crate (v0.1)
+## Ce que fait ce crate
 
 - `list_input_devices() -> Result<Vec<String>, CaptureHelperError>` : énumère les périphériques d'entrée audio du système via [`cpal`](https://crates.io/crates/cpal). Une liste vide est une réponse honnête (aucun micro branché) ; seule une vraie panne d'énumération de l'hôte renvoie une erreur.
 - `default_input_device_name() -> Option<String>` : quel micro `MicCapture::from_default_device()` ouvrirait, sans l'ouvrir. `None` est l'état ordinaire d'une machine sans périphérique audio, pas une panne. À afficher seulement : rien ne garantit que ce nom figure dans `list_input_devices()` (sur ALSA, il n'y figure pas), donc ouvrez le périphérique par défaut avec `from_default_device()` plutôt qu'en passant ce nom à `from_named_device()`.
 - `MicCapture` : ouvre un flux micro (périphérique par défaut ou nommé) et le diffuse comme un itérateur de `MicFrame` — bloquant via `for frame in &mic { ... }` / `next_frame()` ou non bloquant via `try_next_frame()`. Itérer par référence conserve la poignée, donc `mic.error()` peut encore dire pourquoi le flux s'est arrêté ; itérer par valeur emporte cette réponse avec la poignée.
+- `MicCapture::from_options(&CaptureOptions)` : le même flux avec un hôte audio, un périphérique, une fréquence ou une taille de tampon explicites ; les champs vides sont d'abord remplis depuis `CAPTURE_HELPER_HOST`, `CAPTURE_HELPER_SAMPLE_RATE` et `CAPTURE_HELPER_BUFFER_FRAMES` ; ce qui reste à `None` garde le choix de la machine. Voir [Ouvrir le micro par le chemin du système](#ouvrir-le-micro-par-le-chemin-du-système).
+- `MicCapture::dropped_frames() -> u64` : combien de paquets ont été refusés parce que le consommateur prenait du retard. Voir [Quand le consommateur décroche](#quand-le-consommateur-décroche).
 - `MicCapture::error() -> Option<String>` : l'erreur du périphérique qui a mis fin à la capture, s'il y en a eu une. `cpal` signale les pannes de flux via un callback sans chemin de retour vers l'appelant : le message est donc rendu ici plutôt qu'imprimé sur stderr. Un flux en panne termine l'itération au lieu de la bloquer (corrigé en 0.1.2).
 - `MicFrame { samples: Vec<f32>, sample_rate: u32, channels: u16, timestamp: Instant }` : un paquet PCM normalisé en `f32` dans `[-1.0, 1.0]`, quel que soit le format natif du périphérique (`f32`, `i16`, `u16`).
 - `CaptureHelperError` (via `thiserror`) : une variante distincte par cause d'échec — aucun périphérique par défaut, nom introuvable, échec d'énumération, échec de lecture de configuration, format d'échantillon non supporté, échec de construction ou de démarrage du flux. Pas de fourre-tout `String`.
@@ -87,7 +89,7 @@ l'utilisateur. L'installation pour les deux hôtes est dans
 
 Son catalogue de déclencheurs est imposé, pas décoratif :
 [`TRIGGERS.md`](TRIGGERS.md) est le catalogue destiné aux humains,
-`references/triggers.md` en est le miroir destiné à l'agent, et
+`references/triggers.md` en est le miroir destiné à l'agent ;
 `tests/skill.rs` fait échouer `cargo test` — donc le hook de pré-push — si les
 deux divergent, si la `description` du skill dépasse le plafond publié de 1024
 caractères, si son `name` cesse de correspondre à son dossier ou s'il pointe
@@ -148,17 +150,17 @@ cargo llvm-cov --summary-only
 
 ## Ouvrir le micro par le chemin du système
 
-Il n'y a pas d'accélérateur à choisir ici, et mieux vaut le dire franchement que d'en inventer
+Il n'y a pas d'accélérateur à choisir ici ; mieux vaut le dire franchement que d'en inventer
 un : la captation n'est pas du calcul. L'audio arrive exactement en temps réel quel que soit le
-matériel, et la seule chose qui puisse être fausse, c'est le *chemin* qu'il emprunte. Ce chemin,
-c'est la configuration par défaut du périphérique, et c'est ce que cette caisse ouvre :
+matériel ; la seule chose qui puisse être fausse, c'est le *chemin* qu'il emprunte. Ce chemin,
+c'est la configuration par défaut du périphérique : c'est ce que cette caisse ouvre.
 
 - **L'hôte natif** — CoreAudio sur macOS, WASAPI sur Windows, ALSA (et à travers lui PulseAudio
   ou PipeWire) sur Linux. Pas de PortAudio, pas de `ffmpeg`, rien à installer en plus.
 - **La fréquence et le format du périphérique.** Demandez 16 kHz à un micro qui tourne à
-  48 kHz, et le système insère un rééchantillonneur que vous n'avez pas choisi, dans une couche
+  48 kHz : le système insère un rééchantillonneur que vous n'avez pas choisi, dans une couche
   que vous ne voyez pas, avant même le premier échantillon. Ouvrir la fréquence du périphérique
-  l'évite ; rééchantillonner ensuite est au moins le vôtre, et visible.
+  l'évite ; rééchantillonner ensuite est au moins le vôtre, visible de surcroît.
 - **La taille de tampon du pilote** — le compromis que la plateforme a choisi entre latence et
   réveils.
 
@@ -187,7 +189,7 @@ machine, pas à contredire un appelant qui a été précis.
 rééchantillonnage discret.** Le message nomme ce que le périphérique offre vraiment. Un
 rééchantillonneur caché sur le chemin de captation, c'est ainsi qu'un enregistrement finit
 légèrement moins bon que sa source sans que rien ne le signale. Une demande de *tampon*, elle,
-est ramenée dans les bornes du pilote : elle change le minutage, pas les données, et le pilote a
+est ramenée dans les bornes du pilote : elle change le minutage, pas les données ; le pilote a
 le dernier mot là-dessus.
 
 ## Installation
@@ -199,6 +201,18 @@ capture-helper-rs = "0.2"
 
 Prérequis : Rust 1.85 ou plus récent. `cpal` gère nativement CoreAudio (macOS), WASAPI (Windows) et ALSA/PulseAudio/JACK/PipeWire (Linux) — pas de dépendance externe type `ffmpeg` ou `PortAudio` à installer séparément.
 
+Sous Linux, compiler `cpal` demande les en-têtes de développement ALSA ainsi que `pkg-config`,
+absents de la plupart des machines tant qu'on ne les demande pas (Debian/Ubuntu :
+`sudo apt-get install libasound2-dev pkg-config`). Sans eux, la compilation s'arrête dans
+`alsa-sys`, avant même le code de cette caisse.
+
+La fonctionnalité `cli`, active par défaut, construit le binaire `capture-helper-rs` et tire
+`clap` ainsi que `hound`. Une bibliothèque qui n'appelle jamais le binaire peut s'en passer :
+
+```toml
+capture-helper-rs = { version = "0.2", default-features = false }
+```
+
 ## Vérifications avant de pousser
 
 ```bash
@@ -209,7 +223,7 @@ cargo test --all
 scripts/check-fresh-resolve.sh   # compile sans Cargo.lock, comme un consommateur en aval
 ```
 
-Le dernier existe parce que les trois autres et la CI, compilent tous contre le
+Le dernier existe parce que les trois autres, comme la CI, compilent tous contre le
 `Cargo.lock` commité — que personne n'utilise en aval du crate publié. Un intervalle de
 dépendance devenu mauvais reste vert ici tout en cassant chaque `cargo add` / `cargo
 install` neuf et `cargo publish --dry-run` ne le voit pas non plus (il vérifie avec le

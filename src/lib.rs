@@ -3,7 +3,7 @@
 //! This is a Rust port of the *intent* of the Python
 //! [`capture-helper`](https://github.com/warith-harchaoui/capture-helper)'s
 //! `iter_mic_audio`: turn a live microphone into a stream of small audio
-//! chunks with honest, typed errors. It is a deliberately narrow v0.1 — see
+//! chunks with honest, typed errors. It is a deliberately narrow crate — see
 //! the crate README for exactly what is (and is not) in scope.
 //!
 //! ```no_run

@@ -6,13 +6,15 @@
 
 Rust rewrite of the microphone half of [`capture-helper`](https://github.com/warith-harchaoui/capture-helper): turn a live microphone into a stream of small audio packets (PCM) that the rest of an audio pipeline can consume, with no third-party service in the loop.
 
-This is not a line-by-line port. The camera half of the original (`iter_camera_frames`, the multi-source scene GUI, video mixing) is out of scope for v0.1 — only the microphone is covered.
+This is not a line-by-line port. The camera half of the original (`iter_camera_frames`, the multi-source scene GUI, video mixing) is out of scope — only the microphone is covered.
 
-## What this crate does (v0.1)
+## What this crate does
 
 - `list_input_devices() -> Result<Vec<String>, CaptureHelperError>` — enumerates the system's audio input devices via [`cpal`](https://crates.io/crates/cpal). An empty list is an honest answer (no microphone plugged in); only a real host enumeration failure returns an error.
 - `default_input_device_name() -> Option<String>` — which microphone `MicCapture::from_default_device()` would open, without opening it. `None` is the ordinary state of a headless machine, not a failure. For display only: the name is not guaranteed to appear in `list_input_devices()` (on ALSA it does not), so open the default with `from_default_device()` rather than by passing this name to `from_named_device()`.
 - `MicCapture` — opens a microphone stream (default or named device) and exposes it as an iterator of `MicFrame`: blocking via `for frame in &mic { ... }` / `next_frame()`, or non-blocking via `try_next_frame()`. Iterating by reference keeps the handle, so `mic.error()` can still say why the stream ended; iterating by value gives that answer away with the handle.
+- `MicCapture::from_options(&CaptureOptions)` — the same stream with an explicit audio host, device, sample rate or buffer size; unset fields are first filled from `CAPTURE_HELPER_HOST`, `CAPTURE_HELPER_SAMPLE_RATE` and `CAPTURE_HELPER_BUFFER_FRAMES`, and whatever is still `None` keeps the machine's own choice. See [Opening the microphone on the system's own path](#opening-the-microphone-on-the-systems-own-path).
+- `MicCapture::dropped_frames() -> u64` — how many frames were refused because the consumer fell behind. See [When the consumer falls behind](#when-the-consumer-falls-behind).
 - `MicCapture::error() -> Option<String>` — the device error that ended the capture, if one did. `cpal` reports stream failures through a callback with no path back to the caller, so the message is handed back here rather than printed to stderr. A failed stream ends iteration instead of blocking it (fixed in 0.1.2).
 - `MicFrame { samples: Vec<f32>, sample_rate: u32, channels: u16, timestamp: Instant }` — a PCM packet normalized to `f32` in `[-1.0, 1.0]`, regardless of the device's native sample format (`f32`, `i16`, `u16`).
 - `CaptureHelperError` (via `thiserror`) — one variant per failure mode: no default device, named device not found, enumeration failure, stream-config failure, unsupported sample format, stream-build failure, stream-start failure. No catch-all `String`.
@@ -192,6 +194,17 @@ capture-helper-rs = "0.2"
 ```
 
 Requires Rust 1.85 or newer. `cpal` handles CoreAudio (macOS), WASAPI (Windows), and ALSA/PulseAudio/JACK/PipeWire (Linux) natively — no separate `ffmpeg`/`PortAudio` install needed.
+
+On Linux, building `cpal` needs the ALSA development headers and `pkg-config`, which most
+machines lack until asked (Debian/Ubuntu: `sudo apt-get install libasound2-dev pkg-config`).
+Without them the build stops in `alsa-sys`, before any of this crate's code compiles.
+
+The default `cli` feature builds the `capture-helper-rs` binary and pulls in `clap` and
+`hound`. A library consumer that never calls the binary can leave them out:
+
+```toml
+capture-helper-rs = { version = "0.2", default-features = false }
+```
 
 ## Checks before pushing
 

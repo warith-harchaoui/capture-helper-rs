@@ -82,6 +82,8 @@ GUI, video mixing, the HTTP API or MCP.
 
 Both install side by side: this binary is `capture-helper-rs`, not
 `capture-helper`.
+On Linux, `cargo install capture-helper-rs` first needs the ALSA headers and
+`pkg-config` (`sudo apt-get install libasound2-dev pkg-config`).
 
 ## References
 
