@@ -4,6 +4,16 @@ All notable changes to `capture-helper-rs` are documented here. The format follo
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **`MicCapture::from_named_device` dropped what the environment pinned.** It
+  opened the device with `CaptureOptions::default()` on `cpal::default_host()`,
+  never reading `CAPTURE_HELPER_HOST`, `CAPTURE_HELPER_SAMPLE_RATE` or
+  `CAPTURE_HELPER_BUFFER_FRAMES`, which `from_default_device` and the CLI both
+  honour. It now goes through `from_options`, so the device is looked up on the
+  pinned host and opened at the pinned rate and buffer size.
+
 ## [0.2.0] — 2026-11-04
 
 The capture path could already only be the native one; now it can be chosen,

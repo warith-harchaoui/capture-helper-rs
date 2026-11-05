@@ -110,6 +110,15 @@ pub struct MicCapture {
     dropped: Arc<AtomicU64>,
 }
 
+/// The options [`MicCapture::from_named_device`] opens: the device named, every
+/// other field left for the environment to fill.
+fn named_device_options(name: &str) -> CaptureOptions {
+    CaptureOptions {
+        device: Some(name.to_string()),
+        ..CaptureOptions::default()
+    }
+}
+
 impl MicCapture {
     /// Start capturing from the host's default input device.
     pub fn from_default_device() -> Result<Self, CaptureHelperError> {
@@ -141,19 +150,12 @@ impl MicCapture {
 
     /// Start capturing from the input device whose `cpal` name matches `name`
     /// exactly. Use [`crate::list_input_devices`] to discover available names.
+    ///
+    /// The host, sample rate and buffer size come from the environment exactly
+    /// as in [`MicCapture::from_options`]: naming a device must not drop what
+    /// the machine pinned.
     pub fn from_named_device(name: &str) -> Result<Self, CaptureHelperError> {
-        let host = cpal::default_host();
-        let mut devices = host
-            .input_devices()
-            .map_err(|e| CaptureHelperError::DeviceEnumeration(e.to_string()))?;
-        let device = devices
-            .find(|d| d.to_string() == name)
-            .ok_or_else(|| CaptureHelperError::DeviceNotFound(name.to_string()))?;
-        Self::from_device(&device)
-    }
-
-    fn from_device(device: &cpal::Device) -> Result<Self, CaptureHelperError> {
-        Self::from_device_with(device, &CaptureOptions::default())
+        Self::from_options(&named_device_options(name))
     }
 
     fn from_device_with(
@@ -364,7 +366,25 @@ mod tests {
     use super::*;
     use crate::error::CaptureHelperError;
 
-    /// The i16 -> f32 conversion used in `from_device` must stay within the
+    /// Naming a device used to open `CaptureOptions::default()` without the
+    /// environment, so a machine's pinned host, rate and buffer were dropped
+    /// the moment a caller chose a microphone by name.
+    #[test]
+    fn a_named_device_keeps_what_the_environment_pinned() {
+        let env = |key: &str| match key {
+            k if k == crate::HOST_ENV => Some("CoreAudio".to_string()),
+            k if k == crate::SAMPLE_RATE_ENV => Some("44100".to_string()),
+            k if k == crate::BUFFER_FRAMES_ENV => Some("256".to_string()),
+            _ => None,
+        };
+        let options = named_device_options("USB Mic").with_lookup(env);
+        assert_eq!(options.device.as_deref(), Some("USB Mic"));
+        assert_eq!(options.host.as_deref(), Some("CoreAudio"));
+        assert_eq!(options.sample_rate, Some(44_100));
+        assert_eq!(options.buffer_frames, Some(256));
+    }
+
+    /// The i16 -> f32 conversion used in `from_device_with` must stay within the
     /// documented [-1.0, 1.0] bound at both extremes, including i16::MIN
     /// (which a naive `/ i16::MAX` conversion overshoots to -1.0000305).
     #[test]
