@@ -6,6 +6,8 @@ All notable changes to `capture-helper-rs` are documented here. The format follo
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-11-05
+
 ### Fixed
 - **`MicCapture::from_named_device` dropped what the environment pinned.** It
   opened the device with `CaptureOptions::default()` on `cpal::default_host()`,
